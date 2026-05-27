@@ -1,7 +1,8 @@
 {
   "expo": {
-    "name": "Nuvixapp",
+    "name": "Nuvix+",
     "slug": "nuvixAPP",
+    "scheme": "Nuvix",
     "version": "1.0.0",
     "orientation": "default",
     "icon": "./assets/icon.png",
@@ -28,7 +29,12 @@
       "package": "com.riley_faze.nuvixAPP"
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/favicon.png",
+      "display": "standalone",
+      "themeColor": "#000000",
+      "backgroundColor": "#000000",
+      "orientation": "default", 
+      "bundler": "metro"
     },
     "extra": {
       "eas": {

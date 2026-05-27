@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useContext, useRef } from 'react';
 import { 
   View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, 
-  ActivityIndicator, useWindowDimensions, FlatList, Share, Alert, Platform, Dimensions, Animated
+  ActivityIndicator, useWindowDimensions, FlatList, Share, Alert, Platform, Dimensions, Animated, Modal, TextInput, KeyboardAvoidingView
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
@@ -11,9 +11,19 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview'; 
 import * as ScreenOrientation from 'expo-screen-orientation';
 import AsyncStorage from '@react-native-async-storage/async-storage'; 
+import * as ImagePicker from 'expo-image-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
 import { ThemeContext } from '../context/ThemeContext';
 import { LibraryContext } from '../context/LibraryContext'; 
 import { SIZES } from '../constants/theme';
+
+const KeyboardWrapper = Platform.OS === 'ios' ? KeyboardAvoidingView : View;
+
+let YoutubeIframe = null;
+if (Platform.OS !== 'web') {
+  try { YoutubeIframe = require('react-native-youtube-iframe').default; } 
+  catch (e) { console.log("Youtube Iframe not loaded"); }
+}
 
 const API_KEY = "55550670b2e9a6b8c3c3c69b0bdf894f";
 const BASE_URL = "https://api.themoviedb.org/3";
@@ -35,19 +45,80 @@ const injectedTrackingJS = `
       var v = document.querySelector('video') || document.querySelector('iframe').contentWindow.document.querySelector('video');
       if (v && v.duration) {
         window.ReactNativeWebView.postMessage(JSON.stringify({
-          type: 'progress',
-          currentTime: v.currentTime,
-          duration: v.duration
+          type: 'progress', currentTime: v.currentTime, duration: v.duration
         }));
       }
     } catch(e) {}
-  }, 10000);
-  true;
+  }, 10000); true;
 `;
 
+const MixtapeCover = ({ mixtape, theme }) => {
+  const style = mixtape.coverStyle || 'mosaic';
+  const items = mixtape.items || [];
+  
+  if (style === 'custom' && mixtape.customCoverImage) {
+      return <Image source={{ uri: mixtape.customCoverImage }} style={[styles.mixCoverBase, { borderColor: theme.border }]} />;
+  }
+
+  if (items.length === 0) {
+      return (
+          <View style={[styles.mixCoverBase, { backgroundColor: theme.surface, borderColor: theme.border, justifyContent: 'center', alignItems: 'center' }]}>
+              <Ionicons name="musical-notes" size={20} color={theme.textSecondary} />
+          </View>
+      );
+  }
+
+  const getImg = (idx) => `${IMG_BASE}w342${items[idx % items.length].poster_path}`;
+
+  if (style === 'ambient') {
+      return (
+          <View style={[styles.mixCoverBase, { borderColor: theme.border, overflow: 'hidden' }]}>
+              <Image source={{ uri: getImg(0) }} style={{ width: '120%', height: '120%', position: 'absolute', top: '-10%', left: '-10%', resizeMode: 'cover' }} blurRadius={20} />
+              <LinearGradient colors={['rgba(255,255,255,0.1)', 'rgba(0,0,0,0.6)']} style={StyleSheet.absoluteFillObject} />
+              <Text style={{ color: '#fff', fontWeight: '900', fontSize: 10, textAlign: 'center', alignSelf: 'center', marginTop: 'auto', marginBottom: 'auto', paddingHorizontal: 2 }} numberOfLines={1}>{mixtape.title}</Text>
+          </View>
+      );
+  }
+
+  if (style === 'stack') {
+      return (
+          <View style={[styles.mixCoverBase, { borderColor: theme.border, backgroundColor: theme.surface, overflow: 'hidden' }]}>
+              {items.length >= 3 && <Image source={{ uri: getImg(2) }} style={{ position: 'absolute', width: '80%', height: '80%', top: -5, alignSelf: 'center', opacity: 0.5, borderRadius: 4, resizeMode: 'cover' }} />}
+              {items.length >= 2 && <Image source={{ uri: getImg(1) }} style={{ position: 'absolute', width: '90%', height: '90%', top: -2, alignSelf: 'center', opacity: 0.8, borderRadius: 4, resizeMode: 'cover' }} />}
+              <Image source={{ uri: getImg(0) }} style={{ width: '100%', height: '100%', borderRadius: 4, resizeMode: 'cover' }} />
+              <LinearGradient colors={['transparent', 'rgba(0,0,0,0.8)']} style={StyleSheet.absoluteFillObject} />
+          </View>
+      );
+  }
+
+  if (style === 'single') {
+      const singleImg = items[0].backdrop_path || items[0].poster_path;
+      return (
+          <View style={[styles.mixCoverBase, { borderColor: theme.border, overflow: 'hidden' }]}>
+              <Image source={{ uri: `https://image.tmdb.org/t/p/w500${singleImg}` }} style={{ width: '100%', height: '100%', resizeMode: 'cover' }} />
+          </View>
+      );
+  }
+
+  return (
+      <View style={[styles.mixCoverBase, { borderColor: theme.border, flexWrap: 'wrap', flexDirection: 'row', overflow: 'hidden' }]}>
+          <Image source={{ uri: getImg(0) }} style={{ width: '50%', height: '50%', resizeMode: 'cover' }} />
+          <Image source={{ uri: getImg(1) }} style={{ width: '50%', height: '50%', resizeMode: 'cover' }} />
+          <Image source={{ uri: getImg(2) }} style={{ width: '50%', height: '50%', resizeMode: 'cover' }} />
+          <Image source={{ uri: getImg(3) }} style={{ width: '50%', height: '50%', resizeMode: 'cover' }} />
+      </View>
+  );
+};
+
 export default function DetailsScreen() {
-  const { theme, isDarkMode } = useContext(ThemeContext);
-  const { toggleWatchlist, isInWatchlist, addToHistory, watchlist, history } = useContext(LibraryContext); 
+  const { theme, isDarkMode, dataSaver, autoplayTrailers } = useContext(ThemeContext);
+  
+  const imgQualityLogo = dataSaver ? 'w342' : 'w500';
+  const imgQualityHero = dataSaver ? 'w780' : 'original';
+  const imgQualityCast = dataSaver ? 'w92' : 'w185';
+  const imgQualityEp = dataSaver ? 'w342' : 'w500';
+
+  const { toggleWatchlist, isInWatchlist, addToHistory, watchlist, history, mixtapes, createMixtape, toggleInMixtape, updateMixtapeStyle, deleteMixtape } = useContext(LibraryContext); 
   
   const navigation = useNavigation();
   const route = useRoute();
@@ -84,6 +155,16 @@ export default function DetailsScreen() {
   const listIconScale = useRef(new Animated.Value(1)).current;
   const inList = details ? isInWatchlist(details.id) : false;
 
+  const [mixtapeModalVisible, setMixtapeModalVisible] = useState(false);
+  const [showNewMixForm, setShowNewMixForm] = useState(false);
+  const [newMixtapeName, setNewMixtapeName] = useState('');
+  const [newMixtapeDesc, setNewMixtapeDesc] = useState('');
+  
+  const [editMixModalVisible, setEditMixModalVisible] = useState(false);
+  const [activeEditMix, setActiveEditMix] = useState(null);
+  const [mixTitleEdit, setMixTitleEdit] = useState('');
+  const [mixDescEdit, setMixDescEdit] = useState('');
+
   useFocusEffect(
     React.useCallback(() => {
       ScreenOrientation.unlockAsync();
@@ -95,38 +176,60 @@ export default function DetailsScreen() {
     }, [])
   );
 
-  // Cross-device Progress Syncing
+  useEffect(() => {
+    setActiveMediaUrl(null);
+    setCurrentPlayingEpisode(autoPlayEpisode || null);
+    setSelectedSeason(autoPlaySeason || 1);
+    playStartTimeRef.current = null;
+  }, [id, autoPlaySeason, autoPlayEpisode]);
+
   useEffect(() => {
     const loadProgress = async () => {
       try {
         let parsed = {};
-        
-        // Load local progress first
         const stored = await AsyncStorage.getItem(`nuvix_prog_${id}`);
-        if (stored) {
-            parsed = JSON.parse(stored);
-        }
+        if (stored) parsed = JSON.parse(stored);
         
-        // If history is loaded, merge any cloud progress over the local progress
         if (!hasSyncedHistoryRef.current && history.length > 0) {
             const historyItem = history.find(item => item.id === id);
-            if (historyItem && historyItem.progressMap) {
-                parsed = { ...parsed, ...historyItem.progressMap };
+            if (historyItem) {
+                if (historyItem.progressMap) parsed = { ...parsed, ...historyItem.progressMap };
+                if (type === 'movie' && historyItem.savedProgress && !parsed['1-1']) {
+                    parsed['1-1'] = historyItem.savedProgress;
+                }
                 AsyncStorage.setItem(`nuvix_prog_${id}`, JSON.stringify(parsed));
                 hasSyncedHistoryRef.current = true;
             }
         }
-
         setProgressData(parsed);
         progressRef.current = parsed;
       } catch (e) { console.log(e); }
     };
     loadProgress();
-  }, [id, history.length]);
+  }, [id, history.length, type]);
+
+  useEffect(() => {
+    if (type === 'tv' && details && !currentPlayingEpisode) {
+      const historyItem = history.find(item => item.id === id);
+      if (historyItem && historyItem.last_watched_season && historyItem.last_watched_episode) {
+        setSelectedSeason(historyItem.last_watched_season);
+        setCurrentPlayingEpisode(historyItem.last_watched_episode);
+      } else {
+        const keys = Object.keys(progressData);
+        if (keys.length > 0) {
+          const tvKeys = keys.filter(k => k !== '1-1');
+          if (tvKeys.length > 0) {
+            const lastWatched = tvKeys[tvKeys.length - 1].split('-');
+            setSelectedSeason(parseInt(lastWatched[0]));
+            setCurrentPlayingEpisode(parseInt(lastWatched[1]));
+          }
+        }
+      }
+    }
+  }, [details, history, progressData, currentPlayingEpisode, id, type]);
 
   const calculateAndSaveTime = (epNum) => {
     if (!playStartTimeRef.current) return null;
-    
     const timeSpentMinutes = (Date.now() - playStartTimeRef.current) / 60000;
     let epRuntime = type === 'movie' ? (details?.runtime || 120) : (episodes.find(e => e.episode_number === epNum)?.runtime || 45);
     
@@ -134,12 +237,13 @@ export default function DetailsScreen() {
     const currentProg = progressRef.current[key] || 0;
     
     if (currentProg >= 0.95) return currentProg; 
+    if (currentProg > 0.06) return currentProg; 
     
     let newProg = currentProg + (timeSpentMinutes / epRuntime);
     if (newProg >= 0.85 || timeSpentMinutes > epRuntime * 0.85) newProg = 1.0;
     newProg = Math.min(newProg, 1.0);
     
-    if (newProg > currentProg && newProg > 0.01) { 
+    if (newProg > currentProg && newProg > 0.05) { 
         const updated = { ...progressRef.current, [key]: newProg };
         setProgressData(updated);
         progressRef.current = updated;
@@ -149,29 +253,44 @@ export default function DetailsScreen() {
     return currentProg;
   };
 
+  const getLiteItem = () => {
+    if (!details) return null;
+    return {
+      id: details.id, title: details.title || details.name || null,
+      name: details.name || details.title || null,
+      poster_path: details.poster_path || null, backdrop_path: details.backdrop_path || null,
+      vote_average: details.vote_average || 0,
+      release_date: details.release_date || null, first_air_date: details.first_air_date || null,
+      media_type: type, overview: details.overview || ""
+    };
+  };
+
   const syncProgressToContext = (epNum, progValue) => {
     if (!details) return;
     const exactEpisode = type === 'tv' ? episodes.find(e => e.episode_number === epNum) : null;
-
     const liteItem = {
-      id: details.id,
-      title: details.title || null,
-      name: details.name || null,
-      poster_path: details.poster_path || null,
-      backdrop_path: details.backdrop_path || null,
-      vote_average: details.vote_average || 0,
-      release_date: details.release_date || null,
-      first_air_date: details.first_air_date || null,
-      media_type: type, 
-      overview: details.overview || "",
+      ...getLiteItem(),
       episode_still_path: exactEpisode?.still_path || null,
       last_watched_season: type === 'tv' ? selectedSeason : null,
       last_watched_episode: type === 'tv' ? epNum : null,
-      savedProgress: progValue,
-      progressMap: progressRef.current 
+      savedProgress: progValue, progressMap: progressRef.current 
     };
     addToHistory(liteItem);
   };
+
+  const trackingRef = useRef({ calculateAndSaveTime, syncProgressToContext, currentPlayingEpisode });
+  useEffect(() => { trackingRef.current = { calculateAndSaveTime, syncProgressToContext, currentPlayingEpisode }; });
+
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('beforeRemove', () => {
+      if (playStartTimeRef.current) {
+          const { calculateAndSaveTime: calc, syncProgressToContext: sync, currentPlayingEpisode: ep } = trackingRef.current;
+          const finalProg = calc(ep || 1);
+          if (finalProg !== null) sync(ep || 1, finalProg);
+      }
+    });
+    return unsubscribe;
+  }, [navigation]);
 
   useEffect(() => {
     const fetchDetails = async () => {
@@ -188,10 +307,7 @@ export default function DetailsScreen() {
           const colRes = await fetch(`${BASE_URL}/collection/${data.belongs_to_collection.id}?api_key=${API_KEY}`);
           const colData = await colRes.json();
           if (colData.parts) {
-            colParts = colData.parts
-              .sort((a, b) => new Date(a.release_date) - new Date(b.release_date))
-              .filter(p => p.id !== id);
-            
+            colParts = colData.parts.sort((a, b) => new Date(a.release_date) - new Date(b.release_date)).filter(p => p.id !== id);
             setCollectionData(colParts);
             if (colParts.length > 0) setActiveTab('collection');
           }
@@ -206,11 +322,8 @@ export default function DetailsScreen() {
           setSelectedSeason(targetSeason);
           fetchSeason(targetSeason, data); 
         }
-      } catch (error) {
-        console.error("Error fetching details:", error);
-      } finally {
-        setLoading(false);
-      }
+      } catch (error) { console.error("Error fetching details:", error); } 
+      finally { setLoading(false); }
     };
     fetchDetails();
   }, [id, type]);
@@ -221,19 +334,11 @@ export default function DetailsScreen() {
       const res = await fetch(`${BASE_URL}/tv/${id}/season/${seasonNumber}?api_key=${API_KEY}&append_to_response=credits`);
       const data = await res.json();
       setEpisodes(data.episodes || []);
-
       const sourceDetails = fallbackDetails || details;
-      if (data.credits && data.credits.cast && data.credits.cast.length > 0) {
-        setCurrentCast(data.credits.cast);
-      } else if (sourceDetails && sourceDetails.credits?.cast) {
-        setCurrentCast(sourceDetails.credits.cast);
-      }
-
-    } catch (error) {
-      console.error("Error fetching season:", error);
-    } finally {
-      setLoadingEpisodes(false);
-    }
+      if (data.credits && data.credits.cast && data.credits.cast.length > 0) setCurrentCast(data.credits.cast);
+      else if (sourceDetails && sourceDetails.credits?.cast) setCurrentCast(sourceDetails.credits.cast);
+    } catch (error) { console.error("Error fetching season:", error); } 
+    finally { setLoadingEpisodes(false); }
   };
 
   const handleSeasonChange = (seasonNum) => {
@@ -243,7 +348,6 @@ export default function DetailsScreen() {
 
   const handlePlay = (episodeNumber = null, targetServer = selectedServerIndex) => {
     const epToPlay = episodeNumber || currentPlayingEpisode || 1;
-    
     if (currentPlayingEpisode && currentPlayingEpisode !== epToPlay) {
       const finalProg = calculateAndSaveTime(currentPlayingEpisode);
       if (finalProg !== null) syncProgressToContext(currentPlayingEpisode, finalProg);
@@ -253,11 +357,12 @@ export default function DetailsScreen() {
     playStartTimeRef.current = Date.now(); 
 
     const key = type === 'movie' ? '1-1' : `${selectedSeason}-${epToPlay}`;
-    const initialProg = progressRef.current[key] || 0.05; 
+    const initialProg = progressRef.current[key] || 0; 
+    progressRef.current[key] = initialProg;
+    setProgressData({ ...progressRef.current });
     syncProgressToContext(epToPlay, initialProg);
 
-    const imdbId = details?.external_ids?.imdb_id;
-    const targetId = imdbId || id; 
+    const targetId = details?.external_ids?.imdb_id || id; 
     const source = watchSources[targetServer];
     let url = '';
 
@@ -269,40 +374,22 @@ export default function DetailsScreen() {
       url = source.tvUrl.replace('{imdb_id}', targetId).replace('{season}', selectedSeason).replace('{episode}', epToPlay);
     }
 
-    const finalUrl = url.includes('?') ? `${url}&t=${new Date().getTime()}` : `${url}?t=${new Date().getTime()}`;
-    setActiveMediaUrl(finalUrl);
+    setActiveMediaUrl(url.includes('?') ? `${url}&t=${new Date().getTime()}` : `${url}?t=${new Date().getTime()}`);
     setTimeout(() => { scrollViewRef.current?.scrollTo({ y: 0, animated: true }); }, 100);
   };
 
   const handleServerSelect = (index) => {
     setSelectedServerIndex(index);
-    if (activeMediaUrl && !activeMediaUrl.includes('kinocheck.com') && !activeMediaUrl.startsWith('youtube:')) {
-      handlePlay(currentPlayingEpisode, index);
-    }
+    if (activeMediaUrl && !activeMediaUrl.startsWith('youtube:')) handlePlay(currentPlayingEpisode, index);
   };
 
-  const handlePlayTrailer = async () => {
-    try {
-      const kcEndpoint = type === 'tv' ? 'shows' : 'movies';
-      const kcRes = await fetch(`https://api.kinocheck.com/${kcEndpoint}?tmdb_id=${id}&language=en`);
-      
-      if (kcRes.ok) {
-        const kcData = await kcRes.json();
-        if (kcData.trailer && kcData.trailer.url) {
-          setActiveMediaUrl(kcData.trailer.url);
-          setCurrentPlayingEpisode(null);
-          setTimeout(() => { scrollViewRef.current?.scrollTo({ y: 0, animated: true }); }, 100);
-          return; 
-        }
-      }
-    } catch (e) { console.log("KinoCheck error, falling back to TMDB"); }
-
+  const handlePlayTrailer = () => {
     const videos = details?.videos?.results || [];
     const trailer = videos.find(v => v.type === 'Trailer' && v.site === 'YouTube') || videos.find(v => v.site === 'YouTube');
-    
     if (trailer) {
       setActiveMediaUrl(`youtube:${trailer.key}`);
       setCurrentPlayingEpisode(null);
+      playStartTimeRef.current = null;
       setTimeout(() => { scrollViewRef.current?.scrollTo({ y: 0, animated: true }); }, 100);
     } else {
       Alert.alert("No Trailer", "A trailer is not available for this title.");
@@ -314,41 +401,92 @@ export default function DetailsScreen() {
       Animated.timing(listIconScale, { toValue: 1.4, duration: 100, useNativeDriver: true }),
       Animated.spring(listIconScale, { toValue: 1, friction: 4, tension: 60, useNativeDriver: true })
     ]).start();
-    
-    const existingItem = watchlist ? watchlist.find(i => i.id === details.id) : null;
-    
-    if (existingItem) {
-        toggleWatchlist(existingItem);
-    } else {
-        const liteItem = {
-            id: details.id,
-            title: details.title || null,
-            name: details.name || null,
-            poster_path: details.poster_path || null,
-            backdrop_path: details.backdrop_path || null,
-            vote_average: details.vote_average || 0,
-            release_date: details.release_date || null,
-            first_air_date: details.first_air_date || null,
-            media_type: type, 
-            overview: details.overview || ""
-        };
-        toggleWatchlist(liteItem);
-    }
+    toggleWatchlist(getLiteItem());
+  };
+
+  const handleCreateMixtape = () => {
+      if (newMixtapeName.trim()) {
+          createMixtape(newMixtapeName, newMixtapeDesc);
+          setNewMixtapeName('');
+          setNewMixtapeDesc('');
+          setShowNewMixForm(false);
+      }
+  };
+
+  const openMixEditor = (mix) => {
+      setActiveEditMix(mix);
+      setMixTitleEdit(mix.title);
+      setMixDescEdit(mix.description || '');
+      setEditMixModalVisible(true);
+  };
+
+  const saveMixEdit = () => {
+      if (mixTitleEdit.trim()) {
+          updateMixtapeStyle(activeEditMix.id, activeEditMix.coverStyle, activeEditMix.customCoverImage, mixTitleEdit.trim(), mixDescEdit.trim());
+      }
+      setEditMixModalVisible(false);
+  };
+
+  const processImage = async (uri) => {
+      if (Platform.OS === 'web') {
+          return new Promise((resolve, reject) => {
+              const img = new window.Image();
+              img.crossOrigin = 'Anonymous';
+              img.onload = () => {
+                  const canvas = document.createElement('canvas');
+                  const MAX_DIM = 600; 
+                  let w = img.width; let h = img.height;
+                  const size = Math.min(w, h);
+                  const x = (w - size) / 2; const y = (h - size) / 2;
+                  canvas.width = MAX_DIM; canvas.height = MAX_DIM;
+                  const ctx = canvas.getContext('2d');
+                  ctx.drawImage(img, x, y, size, size, 0, 0, MAX_DIM, MAX_DIM);
+                  resolve(canvas.toDataURL('image/jpeg', 0.3));
+              };
+              img.onerror = reject;
+              img.src = uri;
+          });
+      } else {
+          const manipResult = await ImageManipulator.manipulateAsync(
+              uri, [{ resize: { width: 600, height: 600 } }], 
+              { compress: 0.5, format: ImageManipulator.SaveFormat.JPEG, base64: true } 
+          );
+          return `data:image/jpeg;base64,${manipResult.base64}`;
+      }
+  };
+
+  const handlePickMixImage = async () => {
+    try {
+      let result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsEditing: true, aspect: [1, 1], quality: 0.8 });
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const processed = await processImage(result.assets[0].uri);
+        await updateMixtapeStyle(activeEditMix.id, 'custom', processed);
+        setActiveEditMix({...activeEditMix, coverStyle: 'custom', customCoverImage: processed});
+      }
+    } catch (e) { console.error("Mix Image pick error", e); }
   };
 
   const handleShare = async () => {
-    const title = details.title || details.name;
+    if (!details) return;
+    const title = details.title || details.name || 'this title';
     const shareUrl = `https://nuvix.fun/${type}/${id}`;
     try { 
-      await Share.share({ message: `Watch ${title} right now on Nuvix!\n\n${shareUrl}`, url: shareUrl, title: `Check out ${title}` }); 
-    } catch (error) { console.log(error); }
+      if (Platform.OS === 'web') {
+        if (navigator && navigator.share) await navigator.share({ title: `Check out ${title}`, text: `Watch ${title} right now on Nuvix!`, url: shareUrl });
+        else if (navigator && navigator.clipboard) {
+          await navigator.clipboard.writeText(shareUrl);
+          Alert.alert("Link Copied!", "The share link has been copied to your clipboard.");
+        }
+      } else {
+        await Share.share({ message: `Watch ${title} right now on Nuvix!\n\n${shareUrl}`, url: shareUrl, title: `Check out ${title}` }); 
+      }
+    } catch (error) { console.log("Share action cancelled or failed:", error); }
   };
 
   const handleUniversalClose = () => {
     if (currentPlayingEpisode || type === 'movie') {
-        const epNum = currentPlayingEpisode || 1;
-        const finalProg = calculateAndSaveTime(epNum);
-        if (finalProg !== null) syncProgressToContext(epNum, finalProg);
+        const finalProg = calculateAndSaveTime(currentPlayingEpisode || 1);
+        if (finalProg !== null) syncProgressToContext(currentPlayingEpisode || 1, finalProg);
     }
     setActiveMediaUrl(null);
     playStartTimeRef.current = null;
@@ -357,11 +495,8 @@ export default function DetailsScreen() {
 
   const handleFullscreenUpdate = async (event) => {
     if (!isTablet && Platform.OS !== 'web') {
-      if (event.nativeEvent.state === 1) {
-        await ScreenOrientation.unlockAsync(); 
-      } else if (event.nativeEvent.state === 3) {
-        await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
-      }
+      if (event.nativeEvent.state === 1) await ScreenOrientation.unlockAsync(); 
+      else if (event.nativeEvent.state === 3) await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
     }
   };
 
@@ -371,10 +506,9 @@ export default function DetailsScreen() {
       if (data.type === 'progress' && data.duration > 0 && (currentPlayingEpisode || type === 'movie')) {
          let percentage = data.currentTime / data.duration;
          setProgressData(prev => {
-            const key = type === 'movie' ? '1-1' : `${selectedSeason}-${currentPlayingEpisode}`;
+            const key = type === 'movie' ? '1-1' : `${selectedSeason}-${currentPlayingEpisode || 1}`;
             const currentProg = prev[key] || 0;
             if (currentProg >= 0.95) return prev; 
-            
             if (percentage >= 0.85) percentage = 1.0;
             if (percentage > currentProg) {
                 const updated = { ...prev, [key]: percentage };
@@ -398,39 +532,33 @@ export default function DetailsScreen() {
 
   const logoObj = details.images?.logos?.find(l => l.iso_639_1 === 'en') || details.images?.logos?.[0];
   const releaseYear = (details.release_date || details.first_air_date || '').substring(0, 4);
-  const duration = type === 'movie' 
-    ? `${Math.floor(details.runtime / 60)}h ${details.runtime % 60}m` 
-    : `${details.number_of_seasons} Season${details.number_of_seasons > 1 ? 's' : ''}`;
+  const duration = type === 'movie' ? `${Math.floor(details.runtime / 60)}h ${details.runtime % 60}m` : `${details.number_of_seasons} Season${details.number_of_seasons > 1 ? 's' : ''}`;
 
   const gradientMiddle = isDarkMode ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.6)';
-  const hasCollection = collectionData.length > 0;
-  const hasSimilar = similarData.length > 0;
+  
+  const hasCollection = collectionData && collectionData.length > 0;
+  const hasSimilar = similarData && similarData.length > 0;
   const activeCarouselData = activeTab === 'collection' ? collectionData : similarData;
+  
   const videoHeight = activeMediaUrl ? (isTablet ? (height * 0.6) : 300) : (isTablet ? 650 : 500);
   const isYouTube = activeMediaUrl?.startsWith('youtube:');
   const youtubeId = isYouTube ? activeMediaUrl.split(':')[1] : null;
 
   const movieProg = progressData['1-1'] || 0;
   const movieFinished = movieProg >= 0.95;
-  const moviePartial = movieProg > 0 && movieProg < 0.95;
+  const moviePartial = movieProg > 0.05 && movieProg < 0.95; 
 
-  // Dynamic Play / Resume Button Fix
+  const isInAnyMixtape = mixtapes.some(mix => mix.items.some(i => i.id === details.id));
+
   let mainPlayText = 'Play';
   if (type === 'movie') {
-      mainPlayText = movieFinished ? 'Play Again' : moviePartial ? 'Resume' : 'Play';
-  } else if (currentPlayingEpisode) {
-      const epKey = `${selectedSeason}-${currentPlayingEpisode}`;
-      const epProg = progressData[epKey] || 0;
-      const epFinished = epProg >= 0.95;
-      const epPartial = epProg > 0 && epProg < 0.95;
-
-      if (epFinished) {
-          mainPlayText = `Play S${selectedSeason} E${currentPlayingEpisode} Again`;
-      } else if (epPartial) {
-          mainPlayText = `Resume S${selectedSeason} E${currentPlayingEpisode}`;
-      } else {
-          mainPlayText = `Play S${selectedSeason} E${currentPlayingEpisode}`;
-      }
+      mainPlayText = movieFinished ? 'Play Again' : moviePartial ? 'Continue Watching' : 'Play';
+  } else {
+      const epToDisplay = currentPlayingEpisode || 1;
+      const epProg = progressData[`${selectedSeason}-${epToDisplay}`] || 0;
+      if (epProg >= 0.95) mainPlayText = `Play S${selectedSeason} E${epToDisplay} Again`;
+      else if (epProg > 0.05) mainPlayText = `Continue Watching S${selectedSeason} E${epToDisplay}`;
+      else mainPlayText = `Play S${selectedSeason} E${epToDisplay}`;
   }
 
   return (
@@ -445,63 +573,23 @@ export default function DetailsScreen() {
           {activeMediaUrl ? (
             Platform.OS === 'web' ? (
               React.createElement('iframe', {
-                src: isYouTube 
-                  ? `https://www.youtube.com/embed/${youtubeId}?autoplay=1&rel=0&playsinline=1&controls=1&modestbranding=1` 
-                  : activeMediaUrl,
+                src: isYouTube ? `https://www.youtube.com/embed/${youtubeId}?autoplay=${autoplayTrailers ? 1 : 0}&rel=0&playsinline=1&controls=1&modestbranding=1&vq=${dataSaver ? 'large' : 'hd1080'}` : activeMediaUrl,
                 style: { width: '100%', height: '100%', border: 'none', backgroundColor: '#000' },
-                allowFullScreen: true,
-                allow: "autoplay; fullscreen"
+                allowFullScreen: true, allow: autoplayTrailers ? "autoplay; fullscreen" : "fullscreen"
               })
             ) : (
-              <WebView 
-                source={
-                  isYouTube 
-                  ? { 
-                      html: `
-                        <!DOCTYPE html>
-                        <html>
-                          <head>
-                            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-                            <style>
-                              body { margin: 0; padding: 0; background-color: #000; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; }
-                              iframe { width: 100vw; height: 100vh; border: none; }
-                            </style>
-                          </head>
-                          <body>
-                            <iframe 
-                              src="https://www.youtube.com/embed/${youtubeId}?autoplay=1&rel=0&playsinline=1&controls=1&modestbranding=1&origin=https://www.youtube.com" 
-                              allow="autoplay; fullscreen"
-                              allowfullscreen
-                            ></iframe>
-                          </body>
-                        </html>
-                      `,
-                      baseUrl: 'https://www.youtube.com'
-                    }
-                  : { uri: activeMediaUrl }
-                }
-                style={{ flex: 1, backgroundColor: '#000' }}
-                allowsFullscreenVideo={true}
-                allowsInlineMediaPlayback={true}
-                mediaPlaybackRequiresUserAction={false}
-                javaScriptEnabled={true}       
-                domStorageEnabled={true}
-                injectedJavaScript={injectedTrackingJS}
-                onMessage={handleWebViewMessage}
-                userAgent={isYouTube ? "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36" : undefined}
-                onFullscreenUpdate={handleFullscreenUpdate}
-              />
+              isYouTube && YoutubeIframe ? (
+                <View style={{ flex: 1, backgroundColor: '#000', justifyContent: 'center' }}>
+                  <YoutubeIframe height={videoHeight} width={'100%'} play={autoplayTrailers} videoId={youtubeId} initialPlayerParams={{ preventFullScreen: false, rel: 0, modestbranding: 1, vq: dataSaver ? 'large' : 'hd1080' }} />
+                </View>
+              ) : (
+                <WebView source={{ uri: activeMediaUrl }} style={{ flex: 1, backgroundColor: '#000' }} allowsFullscreenVideo={true} allowsInlineMediaPlayback={true} mediaPlaybackRequiresUserAction={false} javaScriptEnabled={true} domStorageEnabled={true} injectedJavaScript={injectedTrackingJS} onMessage={handleWebViewMessage} onFullscreenUpdate={handleFullscreenUpdate} />
+              )
             )
           ) : (
             <>
-              <Image source={{ uri: `${IMG_BASE}original${details.backdrop_path || details.poster_path}` }} style={styles.heroImage} />
+              <Image source={{ uri: `${IMG_BASE}${imgQualityHero}${details.backdrop_path || details.poster_path}` }} style={styles.heroImage} />
               <LinearGradient colors={['transparent', gradientMiddle, theme.background]} style={styles.heroGradientBottom} />
-              
-              {type === 'movie' && (moviePartial || movieFinished) && (
-                <View style={styles.movieProgressBarBg}>
-                  <View style={[styles.movieProgressBarFill, { width: `${movieProg * 100}%`, backgroundColor: theme.primary }]} />
-                </View>
-              )}
             </>
           )}
         </View>
@@ -509,15 +597,13 @@ export default function DetailsScreen() {
         <View style={[styles.contentContainer, activeMediaUrl && { marginTop: 20 }, isTablet && styles.tabletContentContainer]}>
           
           {!activeMediaUrl && (logoObj ? (
-            <Image source={{ uri: `${IMG_BASE}w500${logoObj.file_path}` }} style={styles.logo} resizeMode="contain" />
+            <Image source={{ uri: `${IMG_BASE}${imgQualityLogo}${logoObj.file_path}` }} style={styles.logo} resizeMode="contain" />
           ) : (
             <Text style={[styles.title, { color: theme.text }]}>{details.title || details.name}</Text>
           ))}
 
           <View style={styles.metaRow}>
-            <Text style={[styles.metaText, { color: theme.primary, fontWeight: 'bold' }]}>
-              {Math.round(details.vote_average * 10)}% Match
-            </Text>
+            <Text style={[styles.metaText, { color: theme.primary, fontWeight: 'bold' }]}>{Math.round(details.vote_average * 10)}% Match</Text>
             <Text style={[styles.metaText, { color: theme.textSecondary }]}>{releaseYear}</Text>
             <View style={[styles.metaBadge, { borderColor: theme.textSecondary }]}>
               <Text style={[styles.metaBadgeText, { color: theme.textSecondary }]}>4K</Text>
@@ -528,9 +614,7 @@ export default function DetailsScreen() {
           <View style={[styles.mainActionRow, isTablet && { maxWidth: 500 }]}>
             <TouchableOpacity style={[styles.playButton, { backgroundColor: theme.text }]} onPress={() => handlePlay()}>
               <Ionicons name={movieFinished && type === 'movie' ? "refresh" : "play"} size={20} color={theme.background} />
-              <Text style={[styles.playButtonText, { color: theme.background }]}>
-                {mainPlayText}
-              </Text>
+              <Text style={[styles.playButtonText, { color: theme.background }]}>{mainPlayText}</Text>
             </TouchableOpacity>
 
             <TouchableOpacity style={[styles.actionBtnGlass, { backgroundColor: theme.surfaceGlass, borderColor: theme.border }]} onPress={handlePlayTrailer}>
@@ -564,6 +648,11 @@ export default function DetailsScreen() {
               <Text style={[styles.iconActionText, { color: theme.textSecondary }]}>My List</Text>
             </TouchableOpacity>
             
+            <TouchableOpacity style={styles.iconActionItem} onPress={() => setMixtapeModalVisible(true)} activeOpacity={0.7}>
+              <Ionicons name={isInAnyMixtape ? "albums" : "albums-outline"} size={28} color={isInAnyMixtape ? theme.primary : theme.text} />
+              <Text style={[styles.iconActionText, { color: theme.textSecondary }]}>Mixtape</Text>
+            </TouchableOpacity>
+
             <TouchableOpacity style={styles.iconActionItem} onPress={handleShare} activeOpacity={0.7}>
               <Ionicons name="paper-plane-outline" size={28} color={theme.text} />
               <Text style={[styles.iconActionText, { color: theme.textSecondary }]}>Share</Text>
@@ -576,7 +665,7 @@ export default function DetailsScreen() {
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingVertical: 10 }}>
                 {currentCast.slice(0, 10).map((actor) => (
                   <TouchableOpacity key={actor.id} style={styles.castItem} activeOpacity={0.7} onPress={() => navigation.navigate('MainTabs', { screen: 'Search', params: { query: actor.name } })}>
-                    <Image source={{ uri: actor.profile_path ? `${IMG_BASE}w185${actor.profile_path}` : 'https://via.placeholder.com/150' }} style={styles.castImage} />
+                    <Image source={{ uri: actor.profile_path ? `${IMG_BASE}${imgQualityCast}${actor.profile_path}` : 'https://via.placeholder.com/150' }} style={styles.castImage} />
                     <Text style={[styles.castName, { color: theme.text }]} numberOfLines={2}>{actor.name}</Text>
                   </TouchableOpacity>
                 ))}
@@ -601,7 +690,7 @@ export default function DetailsScreen() {
                   {episodes.map((ep) => {
                     const prog = progressData[`${selectedSeason}-${ep.episode_number}`] || 0;
                     const isFullyWatched = prog >= 0.95;
-                    const isPartiallyWatched = prog > 0 && prog < 0.95;
+                    const isPartiallyWatched = prog > 0.05 && prog < 0.95;
 
                     return (
                       <TouchableOpacity 
@@ -610,7 +699,7 @@ export default function DetailsScreen() {
                         onPress={() => handlePlay(ep.episode_number)}
                       >
                         <View style={styles.episodeImageContainer}>
-                          <Image source={{ uri: ep.still_path ? `${IMG_BASE}w500${ep.still_path}` : `${IMG_BASE}w500${details.backdrop_path}` }} style={styles.episodeImage} />
+                          <Image source={{ uri: ep.still_path ? `${IMG_BASE}${imgQualityEp}${ep.still_path}` : `${IMG_BASE}${imgQualityEp}${details.backdrop_path}` }} style={styles.episodeImage} />
                           
                           {isFullyWatched && <View style={styles.watchedOverlay} />}
                           
@@ -668,7 +757,7 @@ export default function DetailsScreen() {
                 horizontal showsHorizontalScrollIndicator={false} data={activeCarouselData} keyExtractor={(item) => item.id.toString()} snapToInterval={145} snapToAlignment="start" decelerationRate="fast" contentContainerStyle={{ paddingRight: SIZES.padding }}
                 renderItem={({ item }) => (
                   <TouchableOpacity style={styles.carouselCard} activeOpacity={0.9} onPress={() => navigation.push('Details', { id: item.id, type: item.media_type || type })}>
-                    <Image source={{ uri: `${IMG_BASE}w500${item.poster_path}` }} style={[styles.carouselImage, { borderColor: theme.border }]} />
+                    <Image source={{ uri: `${IMG_BASE}${imgQualityEp}${item.poster_path}` }} style={[styles.carouselImage, { borderColor: theme.border }]} />
                   </TouchableOpacity>
                 )}
               />
@@ -678,6 +767,180 @@ export default function DetailsScreen() {
           </View>
         )}
       </ScrollView>
+
+      {/* 🔥 EXPANDED MIXTAPE BOTTOM SHEET WITH EDIT & VIEW REDIRECTS */}
+      <Modal visible={mixtapeModalVisible} transparent animationType="slide">
+        <KeyboardWrapper behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.bottomSheetOverlay}>
+          <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => setMixtapeModalVisible(false)} />
+          <View style={[styles.bottomSheetContainer, { backgroundColor: theme.background, borderColor: theme.border }]}>
+            
+            <View style={styles.bottomSheetHandle} />
+            <Text style={[styles.bottomSheetTitle, { color: theme.text }]}>Add to Mixtape</Text>
+
+            {showNewMixForm ? (
+                <View style={[styles.newMixForm, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+                    <Text style={{color: theme.textSecondary, fontSize: 12, fontWeight: 'bold', marginBottom: 5}}>CREATE NEW</Text>
+                    <TextInput 
+                        style={[styles.mixInput, { backgroundColor: theme.background, color: theme.text, borderColor: theme.border }]}
+                        placeholder="Mixtape Title"
+                        placeholderTextColor={theme.textSecondary}
+                        value={newMixtapeName}
+                        onChangeText={setNewMixtapeName}
+                    />
+                    <TextInput 
+                        style={[styles.mixInputDesc, { backgroundColor: theme.background, color: theme.text, borderColor: theme.border }]}
+                        placeholder="Description (Optional)"
+                        placeholderTextColor={theme.textSecondary}
+                        value={newMixtapeDesc}
+                        onChangeText={setNewMixtapeDesc}
+                        multiline
+                    />
+                    <View style={{flexDirection: 'row', gap: 10, marginTop: 10}}>
+                        <TouchableOpacity style={[styles.actionBtn, {backgroundColor: theme.surfaceGlass}]} onPress={() => setShowNewMixForm(false)}>
+                            <Text style={{color: theme.text, fontWeight: 'bold'}}>Cancel</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={[styles.actionBtn, {backgroundColor: newMixtapeName.trim() ? theme.primary : theme.surfaceGlass}]} disabled={!newMixtapeName.trim()} onPress={handleCreateMixtape}>
+                            <Text style={{color: newMixtapeName.trim() ? '#fff' : theme.textSecondary, fontWeight: 'bold'}}>Create</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            ) : (
+                <TouchableOpacity style={[styles.createNewMixBtn, { borderColor: theme.border, backgroundColor: theme.surface }]} onPress={() => setShowNewMixForm(true)}>
+                    <Ionicons name="add-circle" size={24} color={theme.text} />
+                    <Text style={{color: theme.text, marginLeft: 10, fontSize: 16, fontWeight: 'bold'}}>Create New Mixtape</Text>
+                </TouchableOpacity>
+            )}
+
+            <ScrollView style={{maxHeight: 350, marginTop: 15}} showsVerticalScrollIndicator={false}>
+               {mixtapes.map((mix) => {
+                 const isItemInMix = mix.items.some(i => i.id === details?.id);
+                 return (
+                   <View key={mix.id} style={[styles.mixtapeRowItem, { borderBottomColor: theme.border }]}>
+                     
+                     <TouchableOpacity 
+                        style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}
+                        onPress={() => toggleInMixtape(mix.id, getLiteItem())}
+                     >
+                       <View style={[styles.mixtapeCircleCheck, { borderColor: isItemInMix ? theme.primary : theme.textSecondary, backgroundColor: isItemInMix ? theme.primary : 'transparent' }]}>
+                         {isItemInMix && <Ionicons name="checkmark" size={16} color="#fff" />}
+                       </View>
+
+                       <View style={{ width: 50, height: 50, marginRight: 15 }}>
+                          <MixtapeCover mixtape={mix} theme={theme} />
+                       </View>
+                       
+                       <View style={{flex: 1}}>
+                          <Text style={[styles.mixtapeRowTitle, { color: theme.text }]} numberOfLines={1}>{mix.title}</Text>
+                          <Text style={[styles.mixtapeRowSubtitle, { color: theme.textSecondary }]} numberOfLines={1}>
+                              {mix.items.length} items {mix.description ? ` • ${mix.description}` : ''}
+                          </Text>
+                       </View>
+                     </TouchableOpacity>
+
+                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 15, marginLeft: 10 }}>
+                         <TouchableOpacity 
+                            onPress={() => { 
+                                setMixtapeModalVisible(false); 
+                                navigation.navigate('MainTabs', { screen: 'Library', params: { viewMixtapeId: mix.id } }); 
+                            }}
+                            hitSlop={{top: 15, bottom: 15, left: 10, right: 10}}
+                         >
+                            <Ionicons name="eye-outline" size={24} color={theme.textSecondary} />
+                         </TouchableOpacity>
+                         
+                         <TouchableOpacity 
+                            onPress={() => openMixEditor(mix)}
+                            hitSlop={{top: 15, bottom: 15, left: 10, right: 10}}
+                         >
+                            <Ionicons name="pencil-outline" size={22} color={theme.textSecondary} />
+                         </TouchableOpacity>
+                     </View>
+
+                   </View>
+                 );
+               })}
+               {mixtapes.length === 0 && !showNewMixForm && (
+                 <Text style={{color: theme.textSecondary, textAlign: 'center', marginTop: 30, fontStyle: 'italic'}}>No mixtapes created yet.</Text>
+               )}
+            </ScrollView>
+
+          </View>
+        </KeyboardWrapper>
+      </Modal>
+
+      {/* 🔥 MIXTAPE EDIT MODAL IN DETAILS SCREEN */}
+      <Modal visible={editMixModalVisible} transparent animationType="slide">
+        <KeyboardWrapper behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.bottomSheetOverlay}>
+           <View style={[styles.bottomSheetContainer, { backgroundColor: theme.background, borderColor: theme.border }]}>
+             <View style={styles.bottomSheetHandle} />
+             <Text style={[styles.bottomSheetTitle, { color: theme.text }]}>Edit Mixtape</Text>
+
+             {activeEditMix && (
+               <ScrollView showsVerticalScrollIndicator={false}>
+                 <View style={{ alignItems: 'center', marginBottom: 25 }}>
+                   <View style={{ width: 140, height: 140 }}>
+                     <MixtapeCover mixtape={activeEditMix} theme={theme} />
+                   </View>
+                 </View>
+
+                 <Text style={[styles.inputLabel, { color: theme.textSecondary }]}>RENAME MIXTAPE</Text>
+                 <TextInput 
+                    style={[styles.mixInput, { backgroundColor: theme.surface, color: theme.text, borderColor: theme.border, marginBottom: 15 }]}
+                    value={mixTitleEdit}
+                    onChangeText={setMixTitleEdit}
+                 />
+
+                 <Text style={[styles.inputLabel, { color: theme.textSecondary }]}>DESCRIPTION (OPTIONAL)</Text>
+                 <TextInput 
+                    style={[styles.mixInputDesc, { backgroundColor: theme.surface, color: theme.text, borderColor: theme.border, marginBottom: 20 }]}
+                    value={mixDescEdit}
+                    onChangeText={setMixDescEdit}
+                    multiline
+                 />
+
+                 <Text style={[styles.inputLabel, { color: theme.textSecondary }]}>COVER STYLE</Text>
+                 <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 30 }}>
+                    {['mosaic', 'stack', 'ambient', 'single'].map(style => (
+                        <TouchableOpacity 
+                           key={style} 
+                           onPress={() => {
+                              updateMixtapeStyle(activeEditMix.id, style);
+                              setActiveEditMix({...activeEditMix, coverStyle: style});
+                           }}
+                           style={[
+                             styles.stylePill, 
+                             { backgroundColor: activeEditMix.coverStyle === style ? theme.primary : theme.surfaceGlass, borderColor: theme.border }
+                           ]}
+                        >
+                           <Text style={{ color: activeEditMix.coverStyle === style ? '#fff' : theme.text, fontWeight: 'bold', textTransform: 'capitalize' }}>{style}</Text>
+                        </TouchableOpacity>
+                    ))}
+                    <TouchableOpacity 
+                       onPress={handlePickMixImage}
+                       style={[styles.stylePill, { backgroundColor: activeEditMix.coverStyle === 'custom' ? theme.primary : theme.surfaceGlass, borderColor: theme.border }]}
+                    >
+                       <Ionicons name="image" size={16} color={activeEditMix.coverStyle === 'custom' ? '#fff' : theme.text} style={{marginRight: 5}}/>
+                       <Text style={{ color: activeEditMix.coverStyle === 'custom' ? '#fff' : theme.text, fontWeight: 'bold' }}>Custom Photo</Text>
+                    </TouchableOpacity>
+                 </View>
+
+                 <View style={{ flexDirection: 'row', gap: 10 }}>
+                    <TouchableOpacity style={[styles.actionBtn, { backgroundColor: 'rgba(229, 28, 35, 0.15)' }]} onPress={() => {
+                        deleteMixtape(activeEditMix.id);
+                        setEditMixModalVisible(false);
+                    }}>
+                        <Text style={{ color: '#e51c23', fontWeight: 'bold', fontSize: 16 }}>Delete</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={[styles.actionBtn, { backgroundColor: theme.text }]} onPress={saveMixEdit}>
+                        <Text style={{ color: theme.background, fontWeight: 'bold', fontSize: 16 }}>Done</Text>
+                    </TouchableOpacity>
+                 </View>
+               </ScrollView>
+             )}
+           </View>
+        </KeyboardWrapper>
+      </Modal>
+
     </View>
   );
 }
@@ -689,9 +952,6 @@ const styles = StyleSheet.create({
   heroImage: { width: '100%', height: '100%', resizeMode: 'cover' },
   heroGradientBottom: { position: 'absolute', bottom: 0, left: 0, right: 0, height: '60%' },
   
-  movieProgressBarBg: { position: 'absolute', bottom: 0, left: 0, right: 0, height: 4, backgroundColor: 'rgba(255,255,255,0.2)', zIndex: 10 },
-  movieProgressBarFill: { height: '100%' },
-
   backButton: { position: 'absolute', left: 20, zIndex: 10, padding: 8, backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 25 },
   iconDropShadow: { textShadowColor: 'rgba(0,0,0,0.9)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 6 },
   
@@ -755,4 +1015,23 @@ const styles = StyleSheet.create({
   tabText: { fontSize: 16, fontWeight: 'bold' },
   carouselCard: { marginRight: 15 },
   carouselImage: { width: 130, height: 195, borderRadius: 8, borderWidth: 1, backgroundColor: '#333' },
+
+  mixCoverBase: { width: '100%', aspectRatio: 1, borderRadius: 12, borderWidth: 1, flexWrap: 'wrap', flexDirection: 'row', overflow: 'hidden' }, 
+  bottomSheetOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.6)' },
+  bottomSheetContainer: { width: '100%', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, paddingBottom: Platform.OS === 'ios' ? 40 : 20, borderWidth: 1, borderBottomWidth: 0 },
+  bottomSheetHandle: { width: 40, height: 5, backgroundColor: 'rgba(150,150,150,0.5)', borderRadius: 3, alignSelf: 'center', marginBottom: 20 },
+  bottomSheetTitle: { fontSize: 20, fontWeight: 'bold', marginBottom: 20 },
+  
+  createNewMixBtn: { flexDirection: 'row', alignItems: 'center', padding: 15, borderRadius: 12, borderWidth: 1, borderStyle: 'dashed', marginBottom: 10 },
+  newMixForm: { padding: 15, borderRadius: 12, borderWidth: 1, marginBottom: 10 },
+  mixInput: { height: 45, borderWidth: 1, borderRadius: 8, paddingHorizontal: 15, fontSize: 16, marginBottom: 10 },
+  mixInputDesc: { height: 80, borderWidth: 1, borderRadius: 8, paddingHorizontal: 15, paddingTop: 10, fontSize: 14, textAlignVertical: 'top' },
+  actionBtn: { flex: 1, paddingVertical: 12, borderRadius: 8, alignItems: 'center' },
+
+  mixtapeRowItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth },
+  mixtapeCircleCheck: { width: 24, height: 24, borderRadius: 12, borderWidth: 2, marginRight: 15, justifyContent: 'center', alignItems: 'center' },
+  mixtapeRowTitle: { fontSize: 16, fontWeight: '600', marginBottom: 2 },
+  mixtapeRowSubtitle: { fontSize: 13 },
+  inputLabel: { fontSize: 11, fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8, marginLeft: 4 },
+  stylePill: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20, borderWidth: 1 }
 });

@@ -1,13 +1,14 @@
 // src/screens/ProfileSelectionScreen.js
-import React, { useState, useEffect, useContext, useRef } from 'react';
+import React, { useState, useEffect, useContext, useRef, memo } from 'react';
 import { 
   View, Text, StyleSheet, TouchableOpacity, Image, ScrollView,
-  Modal, TextInput, KeyboardAvoidingView, Platform, Animated, Switch, useWindowDimensions
+  Modal, TextInput, KeyboardAvoidingView, Platform, Animated, Switch, useWindowDimensions, ActivityIndicator, Alert
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker'; 
+import * as ImageManipulator from 'expo-image-manipulator'; 
 import { ThemeContext } from '../context/ThemeContext';
 import { AuthContext } from '../context/AuthContext';
 
@@ -27,6 +28,41 @@ const getDarkerShade = (hex, percent = -30) => {
   return "#"+RR+GG+BB;
 };
 
+// 🔥 CINEMATIC BACKGROUND ENGINE: Upgraded to support smooth zooming
+const CinematicBackdrop = memo(({ uri, isActive }) => {
+  const opacity = useRef(new Animated.Value(isActive ? 1 : 0)).current;
+  const scale = useRef(new Animated.Value(isActive ? 1 : 1.1)).current;
+
+  useEffect(() => {
+    if (isActive) {
+      Animated.parallel([
+        Animated.timing(opacity, { toValue: 1, duration: 1500, useNativeDriver: true }),
+        Animated.timing(scale, { toValue: 1.05, duration: 10000, useNativeDriver: true })
+      ]).start();
+    } else {
+      Animated.timing(opacity, { toValue: 0, duration: 1500, useNativeDriver: true }).start(() => {
+        scale.setValue(1); // Reset scale when hidden
+      });
+    }
+  }, [isActive]);
+
+  return (
+    <Animated.Image 
+      source={{ uri }} 
+      style={[StyleSheet.absoluteFill, { opacity, transform: [{ scale }] }]} 
+      resizeMode="cover" 
+    />
+  );
+});
+
+const FadeLogo = memo(({ uri, isActive }) => {
+  const opacity = useRef(new Animated.Value(isActive ? 1 : 0)).current;
+  useEffect(() => {
+    Animated.timing(opacity, { toValue: isActive ? 1 : 0, duration: 1500, useNativeDriver: true }).start();
+  }, [isActive]);
+  return <Animated.Image source={{ uri }} style={[styles.logoImage, { position: 'absolute', opacity }]} resizeMode="contain" />;
+});
+
 export default function ProfileSelectionScreen() {
   const { theme } = useContext(ThemeContext);
   const { 
@@ -36,21 +72,19 @@ export default function ProfileSelectionScreen() {
   const { width } = useWindowDimensions();
   const isTablet = width >= 768;
 
-  // --- BACKGROUND & LOGO ANIMATION ---
   const [backdrops, setBackdrops] = useState([]);
-  const [bgIndex, setBgIndex] = useState(0);
-  const [nextBgIndex, setNextBgIndex] = useState(1);
-  const fadeAnim = useRef(new Animated.Value(0)).current; 
+  const [activeIndex, setActiveIndex] = useState(0); 
 
-  // --- UI STATE ---
   const [isManaging, setIsManaging] = useState(false);
+  const [isSaving, setIsSaving] = useState(false); 
+  const [isDeleting, setIsDeleting] = useState(false);
+
   const [pinPromptVisible, setPinPromptVisible] = useState(false);
   const [targetProfile, setTargetProfile] = useState(null);
   const [pinAction, setPinAction] = useState('switch'); 
   const [enteredPin, setEnteredPin] = useState('');
   const [pinError, setPinError] = useState('');
 
-  // --- UNIFIED FORM STATE ---
   const [modalVisible, setModalVisible] = useState(false);
   const [editingProfileId, setEditingProfileId] = useState(null);
   const [formName, setFormName] = useState('');
@@ -63,7 +97,6 @@ export default function ProfileSelectionScreen() {
   const [nameError, setNameError] = useState('');
   const [formPinError, setFormPinError] = useState('');
 
-  // Fetch Backdrops & Logos
   useEffect(() => {
     fetch(`${BASE_URL}/trending/all/day?api_key=${API_KEY}`)
       .then(res => res.json())
@@ -85,31 +118,72 @@ export default function ProfileSelectionScreen() {
       }).catch(err => console.error(err));
   }, []);
 
-  // Cinematic Loop
   useEffect(() => {
     if (backdrops.length < 2) return;
     const interval = setInterval(() => {
-      Animated.timing(fadeAnim, { toValue: 1, duration: 2500, useNativeDriver: true }).start(() => {
-        setBgIndex(nextBgIndex);
-        setNextBgIndex((nextBgIndex + 1) % backdrops.length);
-        fadeAnim.setValue(0);
-      });
+       setActiveIndex((prev) => (prev + 1) % backdrops.length);
     }, 9000); 
     return () => clearInterval(interval);
-  }, [backdrops, nextBgIndex]);
+  }, [backdrops.length]);
 
-  // --- IMAGE PICKER ---
   const handlePickImage = async () => {
-    let result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaType.Images,
-      allowsEditing: true, aspect: [1, 1], quality: 0.2, base64: true,
-    });
-    if (!result.canceled && result.assets[0].base64) {
-      setFormImage(`data:image/jpeg;base64,${result.assets[0].base64}`);
+    try {
+      let result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'], 
+        allowsEditing: true, aspect: [1, 1], 
+        quality: 0.8, 
+        base64: false,
+      });
+      
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const asset = result.assets[0];
+        
+        if (Platform.OS === 'web') {
+            const img = new window.Image();
+            img.crossOrigin = 'Anonymous';
+            img.onload = () => {
+                const canvas = document.createElement('canvas');
+                const MAX_DIM = 400; 
+                let w = img.width;
+                let h = img.height;
+
+                const size = Math.min(w, h);
+                const x = (w - size) / 2;
+                const y = (h - size) / 2;
+
+                canvas.width = MAX_DIM;
+                canvas.height = MAX_DIM;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, x, y, size, size, 0, 0, MAX_DIM, MAX_DIM);
+
+                const ultraCompressedBase64 = canvas.toDataURL('image/jpeg', 0.1);
+                setFormImage(ultraCompressedBase64);
+            };
+            img.onerror = (e) => {
+                console.error("Canvas Compression Failed", e);
+                if (asset.base64) setFormImage(`data:image/jpeg;base64,${asset.base64}`);
+                else setFormImage(asset.uri);
+            };
+            img.src = asset.uri;
+        } else {
+            try {
+                const manipResult = await ImageManipulator.manipulateAsync(
+                    asset.uri,
+                    [{ resize: { width: 400, height: 400 } }],
+                    { compress: 0.3, format: ImageManipulator.SaveFormat.JPEG, base64: true }
+                );
+                setFormImage(`data:image/jpeg;base64,${manipResult.base64}`);
+            } catch (manipError) {
+                console.error("Mobile resize failed", manipError);
+                if (asset.uri) setFormImage(asset.uri);
+            }
+        }
+      }
+    } catch (e) {
+      console.error("Image pick error", e);
     }
   };
 
-  // --- EDIT/ADD MODAL HANDLERS ---
   const openEditModal = (profile = null) => {
     setNameError(''); setFormPinError('');
     if (profile) {
@@ -141,10 +215,69 @@ export default function ProfileSelectionScreen() {
         finalPassword = formPin;
     } else if (!formEnablePin) { finalPassword = null; }
 
-    const profileData = { name: formName.trim(), avatarColor: formColor, avatarImage: formImage, password: finalPassword };
-    editingProfileId ? await updateProfile(editingProfileId, profileData) : await addProfile(profileData);
-    setModalVisible(false);
-    setIsManaging(false);
+    if (formImage && formImage.length > 1000000) {
+        const errorMsg = "The selected image is too large (over 1MB). Please select a smaller photo.";
+        if (Platform.OS === 'web') {
+            window.alert(errorMsg);
+        } else {
+            Alert.alert('Image Too Large', errorMsg);
+        }
+        return;
+    }
+
+    setIsSaving(true); 
+    try {
+        const profileData = { name: formName.trim(), avatarColor: formColor, avatarImage: formImage };
+        if (finalPassword !== undefined) {
+            profileData.password = finalPassword;
+        }
+
+        editingProfileId ? await updateProfile(editingProfileId, profileData) : await addProfile(profileData);
+        setModalVisible(false);
+        setIsManaging(false);
+    } catch (e) {
+        console.error(e);
+        if (Platform.OS === 'web') {
+            window.alert("Failed to save profile.");
+        } else {
+            Alert.alert("Error", "Failed to save profile.");
+        }
+    } finally {
+        setIsSaving(false);
+    }
+  };
+
+  const executeDelete = async () => {
+    setIsDeleting(true);
+    try {
+      const success = await removeProfile(editingProfileId);
+      if (success) {
+        setModalVisible(false);
+        setIsManaging(false);
+        if (Platform.OS === 'web') {
+          window.alert('Profile successfully deleted.');
+        } else {
+          Alert.alert('Success', 'Profile successfully deleted.');
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const handleDelete = () => {
+    if (Platform.OS === 'web') {
+      if (window.confirm('Are you sure you want to delete this profile?')) {
+        executeDelete();
+      }
+    } else {
+      Alert.alert('Delete Profile', 'Are you sure you want to delete this profile?', [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Delete', style: 'destructive', onPress: executeDelete }
+      ]);
+    }
   };
 
   const handlePinSubmit = () => {
@@ -156,7 +289,6 @@ export default function ProfileSelectionScreen() {
     }
   };
 
-  // --- GRID RENDERERS ---
   const renderProfileItem = (profile, isSmall = false) => {
     const initial = profile.name ? profile.name.charAt(0).toUpperCase() : '?';
     const gradientColors = [profile.avatarColor, getDarkerShade(profile.avatarColor)];
@@ -178,7 +310,7 @@ export default function ProfileSelectionScreen() {
       }}>
         <View style={[styles.avatarContainer, { width: avatarSize, height: avatarSize }]}>
           {profile.avatarImage ? (
-            <Image source={{ uri: profile.avatarImage }} style={styles.avatar} />
+            <Image key={profile.avatarImage} source={{ uri: profile.avatarImage }} style={styles.avatar} />
           ) : (
             <LinearGradient colors={gradientColors} style={styles.avatar}>
               <Text style={[styles.avatarText, {fontSize: isSmall ? 32 : 38}]}>{initial}</Text>
@@ -189,9 +321,8 @@ export default function ProfileSelectionScreen() {
           )}
         </View>
         
-        {/* Centered Padlock below the avatar */}
         {profile.passwordHash && !isManaging && (
-          <View style={styles.lockBadge}><Ionicons name="lock-closed" size={14} color="#fff" /></View>
+          <View style={[styles.lockBadge, { top: avatarSize - 14 }]}><Ionicons name="lock-closed" size={14} color="#fff" /></View>
         )}
         
         <Text style={styles.profileName} numberOfLines={1}>{profile.name}</Text>
@@ -237,15 +368,13 @@ export default function ProfileSelectionScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: '#000' }]}>
-      
-      {/* ========================================================= */}
-      {/* CINEMATIC BACKGROUND WITH EXPO-SAFE OVERLAY */}
-      {/* ========================================================= */}
       {backdrops.length > 0 && (
         <View style={StyleSheet.absoluteFill}>
-          <Animated.Image source={{ uri: `${IMG_BASE}${backdrops[bgIndex].path}` }} style={[StyleSheet.absoluteFill, { opacity: fadeAnim.interpolate({inputRange:[0,1], outputRange:[1,0]}) }]} />
-          <Animated.Image source={{ uri: `${IMG_BASE}${backdrops[nextBgIndex].path}` }} style={[StyleSheet.absoluteFill, { opacity: fadeAnim }]} />
           
+          {backdrops.map((bg, idx) => (
+             <CinematicBackdrop key={`bg-${idx}`} uri={`${IMG_BASE}${bg.path}`} isActive={idx === activeIndex} />
+          ))}
+
           <LinearGradient 
             colors={['rgba(0,0,0,0.1)', 'rgba(0,0,0,0.85)', '#000000']} 
             style={StyleSheet.absoluteFill} 
@@ -253,31 +382,25 @@ export default function ProfileSelectionScreen() {
         </View>
       )}
 
-      {/* ========================================================= */}
-      {/* MAIN CONTENT (Netflix Layout) */}
-      {/* ========================================================= */}
       <View style={styles.content}>
-        
-        {/* LOGO TITLE MOVED HERE */}
         <View style={styles.logoWrapper}>
-          {backdrops[bgIndex]?.logo && (
-             <Animated.Image 
-               source={{ uri: `${IMG_BASE}${backdrops[bgIndex].logo}` }} 
-               style={[styles.logoImage, { opacity: fadeAnim.interpolate({inputRange:[0,1], outputRange:[1,0]}) }]} 
-               resizeMode="contain"
-             />
-           )}
-           {!backdrops[bgIndex]?.logo && (
-              <Text style={styles.fallbackLogo}>Nuvix+</Text>
-           )}
+          
+          {backdrops.map((bg, idx) => {
+             if (bg.logo) {
+                return <FadeLogo key={`logo-${idx}`} uri={`${IMG_BASE}${bg.logo}`} isActive={idx === activeIndex} />;
+             }
+             return null;
+          })}
+          {!backdrops[activeIndex]?.logo && (
+             <Text style={styles.fallbackLogo}>Nuvix+</Text>
+          )}
+
         </View>
 
         <Text style={styles.title}>{isManaging ? "Manage Profiles" : "Choose your avatar"}</Text>
         
-        {/* SMALLER GRID WITH INTEGRATED ADD BUTTON AT BOTTOM */}
         {renderGrid()}
 
-        {/* MANAGE PROFILES TOGGLE */}
         <TouchableOpacity 
           style={[styles.manageToggleBtn, isManaging && { backgroundColor: theme.text }]} 
           onPress={() => setIsManaging(!isManaging)}
@@ -289,16 +412,13 @@ export default function ProfileSelectionScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* ========================================================= */}
-      {/* UNIFIED MODAL (ProfileScreen Style) */}
-      {/* ========================================================= */}
       <Modal visible={modalVisible} animationType="fade" transparent={true}>
-        <KeyboardAvoidingView behavior="padding" style={styles.modalOverlay}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} enabled={Platform.OS === 'ios'} style={styles.modalOverlay}>
           <View style={[styles.modalCard, { backgroundColor: theme.background, borderColor: theme.border }]}>
             <Text style={[styles.modalTitle, { color: theme.text }]}>{editingProfileId ? 'Edit Profile' : 'Add Profile'}</Text>
             <ScrollView showsVerticalScrollIndicator={false} bounces={false}>
               <TouchableOpacity onPress={handlePickImage} style={styles.avatarPreviewContainer}>
-                {formImage ? <Image source={{ uri: formImage }} style={styles.avatarPreview} /> :
+                {formImage ? <Image key={formImage} source={{ uri: formImage }} style={styles.avatarPreview} /> :
                   <LinearGradient colors={[formColor, getDarkerShade(formColor)]} style={styles.avatarPreview}>
                     <Text style={styles.avatarPreviewText}>{formName.trim() ? formName.charAt(0).toUpperCase() : '?'}</Text>
                   </LinearGradient>
@@ -333,7 +453,6 @@ export default function ProfileSelectionScreen() {
                       secureTextEntry value={formConfirmPin} onChangeText={setFormConfirmPin} placeholder="Confirm PIN" placeholderTextColor={theme.textSecondary} 
                    />
                    
-                   {/* DYNAMIC PASSWORD MATCH FEEDBACK */}
                    {formConfirmPin.length > 0 && formPin !== formConfirmPin ? (
                        <Text style={{color: '#e51c23', fontSize: 12, marginBottom: 10, textAlign: 'center'}}>Passwords do not match</Text>
                    ) : formConfirmPin.length > 0 && formPin === formConfirmPin ? (
@@ -345,17 +464,40 @@ export default function ProfileSelectionScreen() {
               {formPinError && (!formConfirmPin || formPin === formConfirmPin) ? <Text style={styles.errorText}>{formPinError}</Text> : null}
 
               <View style={styles.modalActions}>
-                <TouchableOpacity style={styles.cancelBtn} onPress={() => setModalVisible(false)}><Text style={{color: theme.textSecondary}}>Cancel</Text></TouchableOpacity>
-                <TouchableOpacity style={[styles.saveBtn, {backgroundColor: theme.text}]} onPress={handleSaveProfile}><Text style={{color: theme.background, fontWeight: 'bold'}}>Save</Text></TouchableOpacity>
+                {editingProfileId && profiles.length > 1 ? (
+                  <TouchableOpacity style={styles.deleteBtn} onPress={handleDelete} disabled={isDeleting}>
+                    {isDeleting ? (
+                      <ActivityIndicator size="small" color="#e51c23" />
+                    ) : (
+                      <Text style={styles.deleteBtnText}>Delete</Text>
+                    )}
+                  </TouchableOpacity>
+                ) : <View style={{ flex: 1 }} />}
+                
+                <View style={styles.rightActions}>
+                  <TouchableOpacity style={styles.cancelBtn} onPress={() => setModalVisible(false)} disabled={isSaving || isDeleting}>
+                    <Text style={[styles.cancelBtnText, { color: theme.textSecondary }]}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity 
+                     style={[styles.saveBtn, {backgroundColor: formName.trim() ? theme.text : theme.surfaceGlass}]} 
+                     disabled={!formName.trim() || isSaving || isDeleting}
+                     onPress={handleSaveProfile}
+                  >
+                    {isSaving ? (
+                        <ActivityIndicator size="small" color={formName.trim() ? theme.background : theme.textSecondary} />
+                    ) : (
+                        <Text style={{color: formName.trim() ? theme.background : theme.textSecondary, fontWeight: 'bold'}}>Save</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
               </View>
             </ScrollView>
           </View>
         </KeyboardAvoidingView>
       </Modal>
 
-      {/* PIN PROMPT MODAL */}
       <Modal visible={pinPromptVisible} transparent animationType="fade">
-        <KeyboardAvoidingView behavior="padding" style={styles.modalOverlay}>
+        <KeyboardAvoidingView behavior="padding" style={styles.modalOverlay} enabled={Platform.OS === 'ios'}>
             <View style={[styles.modalCard, { backgroundColor: theme.background, borderColor: theme.border, maxWidth: 350 }]}>
                 <View style={{ alignItems: 'center', marginBottom: 15 }}>
                   <Ionicons name="lock-closed" size={32} color={theme.primary} style={{ marginBottom: 10 }} />
@@ -384,13 +526,13 @@ const styles = StyleSheet.create({
 
   content: { flex: 1, justifyContent: 'flex-end', alignItems: 'center', zIndex: 10, paddingBottom: 60, width: '100%' },
   
-  logoWrapper: { width: '80%', height: 70, justifyContent: 'center', alignItems: 'center', marginBottom: 20 },
+  logoWrapper: { position: 'relative', width: '80%', height: 70, justifyContent: 'center', alignItems: 'center', marginBottom: 20 },
   logoImage: { width: '100%', height: 60 },
   fallbackLogo: { fontFamily: 'Fredoka_700Bold', fontSize: 40, color: '#0071eb' },
 
   title: { fontSize: 24, color: '#fff', marginBottom: 30, textShadowColor: 'rgba(0,0,0,0.8)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 10 },
   pyramidContainer: { alignItems: 'center' },
-  pyramidRow: { flexDirection: 'row', gap: 25, marginBottom: 35 }, // Added bottom margin to clear padlock
+  pyramidRow: { flexDirection: 'row', gap: 25, marginBottom: 35 }, 
   
   standardGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 20, width: '100%', maxWidth: 450, paddingHorizontal: 20, paddingBottom: 15 },
   profileWrapper: { alignItems: 'center', width: 90, position: 'relative' },
@@ -401,8 +543,7 @@ const styles = StyleSheet.create({
   
   manageOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center' },
   
-  // Perfectly centered padlock below the avatar
-  lockBadge: { position: 'absolute', bottom: 25, left: '50%', marginLeft: -14, width: 28, height: 28, borderRadius: 14, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'center', alignItems: 'center', zIndex: 20 },
+  lockBadge: { position: 'absolute', left: '50%', marginLeft: -14, width: 28, height: 28, borderRadius: 14, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'center', alignItems: 'center', zIndex: 20 },
   
   manageToggleBtn: { marginTop: 40, flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 25, borderRadius: 30, borderWidth: 1, borderColor: '#fff', backgroundColor: 'rgba(0,0,0,0.5)' },
   manageToggleText: { color: '#fff', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: 1 },
@@ -417,9 +558,16 @@ const styles = StyleSheet.create({
   swatch: { width: 32, height: 32, borderRadius: 16 },
   input: { height: 50, borderRadius: 12, paddingHorizontal: 15, marginBottom: 10, borderWidth: 1 },
   pinToggleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginVertical: 15 },
-  modalActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 15, marginTop: 25 },
-  saveBtn: { paddingVertical: 12, paddingHorizontal: 25, borderRadius: 20 },
-  cancelBtn: { paddingVertical: 12 },
+  
+  modalActions: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 30, alignItems: 'center' },
+  rightActions: { flexDirection: 'row', flex: 2, justifyContent: 'flex-end', alignItems: 'center' },
+  deleteBtn: { paddingVertical: 10, paddingHorizontal: 15, backgroundColor: 'rgba(229, 28, 35, 0.15)', borderRadius: 12, minWidth: 70, alignItems: 'center' },
+  deleteBtnText: { color: '#e51c23', fontSize: 14, fontWeight: 'bold' },
+  cancelBtn: { paddingVertical: 12, paddingHorizontal: 20, marginRight: 10 },
+  cancelBtnText: { fontSize: 16, fontWeight: '600' },
+  saveBtn: { paddingVertical: 12, paddingHorizontal: 24, borderRadius: 25, flexDirection: 'row', alignItems: 'center', minWidth: 90, justifyContent: 'center' },
+  saveBtnText: { fontSize: 16, fontWeight: 'bold' },
+  
   errorText: { color: '#e51c23', fontSize: 12, marginBottom: 10, textAlign: 'center' },
   actionBtn: { flex: 1, paddingVertical: 14, borderRadius: 12, alignItems: 'center', justifyContent: 'center' }
 });

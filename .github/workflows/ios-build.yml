@@ -1,83 +1,51 @@
-name: Build Unsigned iOS IPA
-
-on:
-  push:
-    branches:
-      - main
-      - master
-  workflow_dispatch:
+name: iOS Build
+on: [push]
 
 jobs:
   build:
     runs-on: macos-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: 20
 
       - name: Setup Ruby
         uses: ruby/setup-ruby@v1
         with:
           ruby-version: '3.2'
-          bundler-cache: true
+          bundler-cache: true 
 
-      - name: Install JS dependencies
+      - name: Install Dependencies
         run: npm install
 
-      - name: Generate Native iOS Code
-        run: npx expo prebuild --platform ios --clean
+      - name: Prebuild iOS Folder
+        run: npx expo prebuild --platform ios
 
-      - name: Install CocoaPods
+      - name: Debug - Find Workspace Name
         run: |
-          cd ios
-          bundle exec pod install
+          echo "Looking inside the iOS folder..."
+          ls -la ios/ | grep .xcworkspace
 
-      - name: Build Unsigned Archive
-        run: |
-          cd ios
-          # We added -resultBundlePath to force Xcode to generate a real error report
-          # And removed optimization flags that might be hiding crashes
-          xcodebuild archive \
-            -workspace Nuvixapp.xcworkspace \
-            -scheme Nuvixapp \
-            -configuration Release \
-            -sdk iphoneos \
-            -archivePath ./Nuvixapp.xcarchive \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            COMPILER_INDEX_STORE_ENABLE=NO \
-            -resultBundlePath ./Nuvixapp.xcresult
+      - name: Run Fastlane Build
+        run: bundle exec fastlane build_sideload
+        env:
+          CI: true
 
-      - name: Package into .ipa
-        if: always()
+      - name: Find and Stage App Bundle
         run: |
-          mkdir -p Payload
-          # Exhaustive search for the .app folder
-          APP_PATH=$(find . -name "*.app" -type d | grep "Release-iphoneos" | head -n 1)
+          mkdir -p build-output
+          # The .app lives inside the .xcarchive
+          find ~/Library/Developer/Xcode/Archives -name "*.app" -type d -exec cp -R {} ./build-output/ \;
           
-          if [ -z "$APP_PATH" ]; then
-            echo "Direct search failed. Scanning globally..."
-            APP_PATH=$(find . -name "Nuvixapp.app" -type d | grep -v "Pods" | head -n 1)
-          fi
+          echo "Checking if we found the app..."
+          ls -R build-output
 
-          if [ -n "$APP_PATH" ]; then
-            echo "SUCCESS: Found app at $APP_PATH"
-            cp -R "$APP_PATH" Payload/
-            zip -r Nuvixapp_unsigned.ipa Payload
-          else
-            echo "CRITICAL: No app found. Looking for why..."
-            # This command will print the LAST 50 lines of the build to catch the actual error
-            echo "--- LAST 50 LINES OF LOG ---"
-            exit 1
-          fi
-
-      - name: Upload Logs on Failure
-        if: failure()
+      - name: Upload Build Output
         uses: actions/upload-artifact@v4
         with:
-          name: Xcode-Debug-Result
-          path: ios/Nuvixapp.xcresult
+          name: App-Bundle
+          path: build-output/

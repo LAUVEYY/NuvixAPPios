@@ -17,7 +17,9 @@ import {
   sendPasswordResetEmail, 
   sendEmailVerification, 
   signOut,
-  getAuth
+  getAuth,
+  applyActionCode, // 🔥 NEW: For handling the email verification link
+  confirmPasswordReset // 🔥 NEW: For handling the password reset link
 } from 'firebase/auth';
 
 const firebaseConfig = {
@@ -46,8 +48,6 @@ try {
 }
 
 const db = firebase.firestore();
-// 🔥 THE FIX: Removed the conflicting db.settings override. 
-// Firebase will now use its default smart-connection manager.
 
 export const AuthContext = createContext();
 
@@ -81,6 +81,16 @@ export const AuthProvider = ({ children }) => {
     return `h_${hash}`;
   };
 
+  // 🔥 THE ROUTING BRAIN: Tells Firebase how to handle Deep Links (App vs Web)
+  const actionCodeSettings = {
+    // Replace with your final deployed web domain (e.g., 'https://nuvix.fun')
+    url: 'https://nuvix-plus-social.firebaseapp.com', 
+    handleCodeInApp: true,
+    // Replace these with your actual app package IDs when deploying to App Stores
+    iOS: { bundleId: 'com.nuvix.app' },
+    android: { packageName: 'com.nuvix.app', installApp: true, minimumVersion: '1' }
+  };
+
   // --- 1. FIREBASE AUTH LISTENER ---
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
@@ -109,7 +119,6 @@ export const AuthProvider = ({ children }) => {
           let loadedProfiles = snapshot.docs.map(doc => doc.data());
 
           if (loadedProfiles.length === 0) {
-            // Abort profile creation if offline cache is empty
             if (snapshot.metadata.fromCache) {
                 console.warn("Offline with empty cache. Aborting profile creation. Falling back to Guest.");
                 Alert.alert(
@@ -173,7 +182,8 @@ export const AuthProvider = ({ children }) => {
 
   const signup = async (email, password) => {
     const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-    await sendEmailVerification(userCredential.user);
+    // Attach the actionCodeSettings to trigger the Deep Link
+    await sendEmailVerification(userCredential.user, actionCodeSettings);
     
     await db.collection('users').doc(userCredential.user.uid).set({
       email: email,
@@ -185,7 +195,17 @@ export const AuthProvider = ({ children }) => {
   };
 
   const resetPassword = async (email) => {
-    await sendPasswordResetEmail(auth, email);
+    // Attach the actionCodeSettings to trigger the Deep Link
+    await sendPasswordResetEmail(auth, email, actionCodeSettings);
+  };
+
+  // 🔥 NEW: Deep Link Handlers
+  const verifyEmailCode = async (code) => {
+    return await applyActionCode(auth, code);
+  };
+
+  const confirmNewPassword = async (code, newPassword) => {
+    return await confirmPasswordReset(auth, code, newPassword);
   };
 
   const loginAsGuest = () => { setIsGuest(true); };
@@ -266,6 +286,7 @@ export const AuthProvider = ({ children }) => {
   return (
     <AuthContext.Provider value={{ 
       user, isGuest, loading, login, signup, resetPassword, loginAsGuest, logout,
+      verifyEmailCode, confirmNewPassword, // 🔥 Exported the Deep Link Handlers
       profiles, activeProfile, activeProfileKey, switchProfile,
       addProfile, updateProfile, removeProfile, verifyPassword, AVATAR_COLORS
     }}>

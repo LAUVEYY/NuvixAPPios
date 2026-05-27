@@ -2,18 +2,18 @@
 import React, { useState, useContext, useEffect } from 'react';
 import { 
   View, Text, StyleSheet, ScrollView, TouchableOpacity, 
-  Switch, useWindowDimensions, Modal, TextInput, KeyboardAvoidingView, Platform, Image, Alert
+  Switch, useWindowDimensions, Modal, TextInput, KeyboardAvoidingView, Platform, Image, Alert, ActivityIndicator
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as ImagePicker from 'expo-image-picker';
+import * as ImageManipulator from 'expo-image-manipulator'; 
 import { useNavigation } from '@react-navigation/native';
 import { ThemeContext } from '../context/ThemeContext';
 import { AuthContext } from '../context/AuthContext';
 import { SIZES } from '../constants/theme';
 
-// 🔥 THE FIX: Use View on Android to prevent the infinite bouncing loop, keep KeyboardAvoidingView on iOS
 const KeyboardWrapper = Platform.OS === 'ios' ? KeyboardAvoidingView : View;
 
 const getDarkerShade = (hex, percent = -30) => {
@@ -37,7 +37,11 @@ const getDarkerShade = (hex, percent = -30) => {
 };
 
 export default function ProfileScreen() {
-  const { theme, isDarkMode, toggleTheme } = useContext(ThemeContext);
+  const { 
+      theme, themeMode, changeThemeMode, 
+      dataSaver, toggleDataSaver, autoplayTrailers, toggleAutoplayTrailers 
+  } = useContext(ThemeContext);
+  
   const { 
     profiles, activeProfileKey, switchProfile, 
     addProfile, updateProfile, removeProfile, verifyPassword, logout, AVATAR_COLORS 
@@ -49,19 +53,18 @@ export default function ProfileScreen() {
   const isTablet = width >= 768;
 
   const [isManaging, setIsManaging] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
-  // --- PIN PROMPT MODAL STATE ---
   const [pinPromptVisible, setPinPromptVisible] = useState(false);
   const [targetProfileToEdit, setTargetProfileToEdit] = useState(null);
   const [pinActionType, setPinActionType] = useState('edit'); 
   const [enteredPromptPin, setEnteredPromptPin] = useState('');
   const [pinPromptError, setPinPromptError] = useState('');
 
-  // --- EDIT MODAL STATE ---
   const [modalVisible, setModalVisible] = useState(false);
   const [editingProfileId, setEditingProfileId] = useState(null); 
   
-  // --- FORM STATE ---
   const [formName, setFormName] = useState('');
   const [formColor, setFormColor] = useState(AVATAR_COLORS[0]);
   const [formImage, setFormImage] = useState(null);
@@ -70,9 +73,20 @@ export default function ProfileScreen() {
   const [formPin, setFormPin] = useState('');
   const [formConfirmPin, setFormConfirmPin] = useState('');
   
-  // --- ERROR STATE ---
   const [nameError, setNameError] = useState('');
   const [pinError, setPinError] = useState('');
+  
+  const [themeModalVisible, setThemeModalVisible] = useState(false);
+
+  const handleClearCache = () => {
+    const msg = 'Temporary app cache has been successfully cleared, freeing up storage.';
+    Platform.OS === 'web' ? window.alert(msg) : Alert.alert('Cache Cleared', msg);
+  };
+
+  const handleSelectTheme = (mode) => {
+    changeThemeMode(mode);
+    setThemeModalVisible(false);
+  };
 
   useEffect(() => { if (formName.trim()) setNameError(''); }, [formName]);
   useEffect(() => { 
@@ -80,14 +94,12 @@ export default function ProfileScreen() {
     if (!formEnablePin) { setFormPin(''); setFormConfirmPin(''); }
   }, [formPin, formConfirmPin, formEnablePin]);
 
-  // --- PIN PROMPT HANDLERS ---
   const handlePinPromptSubmit = () => {
     if (verifyPassword(targetProfileToEdit.key, enteredPromptPin)) {
       setPinPromptVisible(false);
       if (pinActionType === 'edit') {
         openModal(targetProfileToEdit);
       } else {
-        // --- REDIRECT: Valid PIN entered, switch and go Home ---
         switchProfile(targetProfileToEdit.key);
         navigation.navigate('Home');
       }
@@ -96,7 +108,6 @@ export default function ProfileScreen() {
     }
   };
 
-  // --- EDIT MODAL HANDLERS ---
   const openModal = (profile = null) => {
     setNameError('');
     setPinError('');
@@ -128,16 +139,61 @@ export default function ProfileScreen() {
   };
 
   const handlePickImage = async () => {
-    let result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaType.Images,
-      allowsEditing: true,
-      aspect: [1, 1], 
-      quality: 0.2,   
-      base64: true,   
-    });
+    try {
+      let result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'], 
+        allowsEditing: true,
+        aspect: [1, 1], 
+        quality: 0.8, 
+        base64: false, 
+      });
 
-    if (!result.canceled && result.assets[0].base64) {
-      setFormImage(`data:image/jpeg;base64,${result.assets[0].base64}`);
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const asset = result.assets[0];
+        
+        if (Platform.OS === 'web') {
+            const img = new window.Image();
+            img.crossOrigin = 'Anonymous';
+            img.onload = () => {
+                const canvas = document.createElement('canvas');
+                const MAX_DIM = 400; 
+                let w = img.width;
+                let h = img.height;
+
+                const size = Math.min(w, h);
+                const x = (w - size) / 2;
+                const y = (h - size) / 2;
+
+                canvas.width = MAX_DIM;
+                canvas.height = MAX_DIM;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, x, y, size, size, 0, 0, MAX_DIM, MAX_DIM);
+
+                const ultraCompressedBase64 = canvas.toDataURL('image/jpeg', 0.1);
+                setFormImage(ultraCompressedBase64);
+            };
+            img.onerror = (e) => {
+                console.error("Canvas Compression Failed", e);
+                if (asset.base64) setFormImage(`data:image/jpeg;base64,${asset.base64}`);
+                else setFormImage(asset.uri);
+            };
+            img.src = asset.uri;
+        } else {
+            try {
+                const manipResult = await ImageManipulator.manipulateAsync(
+                    asset.uri,
+                    [{ resize: { width: 400, height: 400 } }], 
+                    { compress: 0.3, format: ImageManipulator.SaveFormat.JPEG, base64: true } 
+                );
+                setFormImage(`data:image/jpeg;base64,${manipResult.base64}`);
+            } catch (manipError) {
+                console.error("Mobile resize failed", manipError);
+                if (asset.uri) setFormImage(asset.uri);
+            }
+        }
+      }
+    } catch (e) {
+      console.error("Image pick error", e);
     }
   };
 
@@ -171,42 +227,86 @@ export default function ProfileScreen() {
 
     if (hasError) return;
 
-    const profileData = {
-      name: formName.trim(),
-      avatarColor: formColor,
-      avatarImage: formImage,
-      password: finalPassword
-    };
-
-    if (editingProfileId) {
-      await updateProfile(editingProfileId, profileData);
-    } else {
-      const newProf = await addProfile(profileData);
-      if (newProf) {
-        // --- REDIRECT: New profile created, switch and go Home ---
-        switchProfile(newProf.key);
-        navigation.navigate('Home'); 
-      }
+    if (formImage && formImage.length > 1000000) {
+        const errorMsg = "The selected image is too large (over 1MB). Please select a smaller photo.";
+        if (Platform.OS === 'web') {
+            window.alert(errorMsg);
+        } else {
+            Alert.alert('Image Too Large', errorMsg);
+        }
+        return;
     }
-    
-    setModalVisible(false);
-    setIsManaging(false);
+
+    setIsSaving(true);
+    try {
+      const profileData = {
+        name: formName.trim(),
+        avatarColor: formColor,
+        avatarImage: formImage
+      };
+      
+      if (finalPassword !== undefined) {
+        profileData.password = finalPassword;
+      }
+
+      if (editingProfileId) {
+        await updateProfile(editingProfileId, profileData);
+      } else {
+        const newProf = await addProfile(profileData);
+        if (newProf) {
+          switchProfile(newProf.key);
+          navigation.navigate('Home'); 
+        }
+      }
+      
+      setModalVisible(false);
+      setIsManaging(false);
+    } catch (e) {
+      console.error(e);
+      if (Platform.OS === 'web') {
+          window.alert("Failed to save profile.");
+      } else {
+          Alert.alert("Error", "Failed to save profile.");
+      }
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const executeDelete = async () => {
+    setIsDeleting(true);
+    try {
+      const success = await removeProfile(editingProfileId);
+      if (success) {
+        setModalVisible(false);
+        setIsManaging(false);
+        if (Platform.OS === 'web') {
+          window.alert('Profile successfully deleted.');
+        } else {
+          Alert.alert('Success', 'Profile successfully deleted.');
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setIsDeleting(false);
+    }
   };
 
   const handleDelete = () => {
-    Alert.alert('Delete Profile', 'Are you sure you want to delete this profile?', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Delete', style: 'destructive', onPress: async () => {
-          const success = await removeProfile(editingProfileId);
-          if (success) {
-            setModalVisible(false);
-            setIsManaging(false);
-          }
-      }}
-    ]);
+    if (Platform.OS === 'web') {
+      if (window.confirm('Are you sure you want to delete this profile?')) {
+        executeDelete();
+      }
+    } else {
+      Alert.alert('Delete Profile', 'Are you sure you want to delete this profile?', [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Delete', style: 'destructive', onPress: executeDelete }
+      ]);
+    }
   };
 
-  const renderMenuItem = (icon, title, subtitle, onPress, showToggle = false, toggleValue, onToggle) => (
+  const renderMenuItem = (icon, title, subtitle, onPress, showToggle = false, toggleValue, onToggle, valueText = null) => (
     <TouchableOpacity style={[styles.menuItem, { borderBottomColor: theme.border }]} onPress={onPress} activeOpacity={showToggle ? 1 : 0.7}>
       <View style={styles.menuItemLeft}>
         <Ionicons name={icon} size={24} color={theme.textSecondary} style={{ marginRight: 15 }} />
@@ -217,6 +317,11 @@ export default function ProfileScreen() {
       </View>
       {showToggle ? (
         <Switch value={toggleValue} onValueChange={onToggle} trackColor={{ false: theme.border, true: theme.primary }} thumbColor="#fff"/>
+      ) : valueText ? (
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+           <Text style={{ color: theme.textSecondary, marginRight: 8, textTransform: 'capitalize' }}>{valueText}</Text>
+           <Ionicons name="chevron-forward" size={20} color={theme.textSecondary} />
+        </View>
       ) : (
         <Ionicons name="chevron-forward" size={20} color={theme.textSecondary} />
       )}
@@ -227,12 +332,10 @@ export default function ProfileScreen() {
     <View style={[styles.container, { backgroundColor: theme.background }]}>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 100, paddingTop: Math.max(insets.top, 20) }}>
         
-        {/* HEADER */}
         <View style={styles.header}>
           <Text style={[styles.headerTitle, { color: theme.text }]}>{isManaging ? 'Manage Profiles' : "Who's Watching?"}</Text>
         </View>
 
-        {/* PROFILES ROW */}
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.profilesContainer}>
           {profiles.map((profile) => {
             const isActive = profile.key === activeProfileKey;
@@ -257,14 +360,12 @@ export default function ProfileScreen() {
                     }
                   } else {
                     if (profile.key !== activeProfileKey && profile.passwordHash) {
-                      // Profile is locked: Trigger PIN Modal
                       setTargetProfileToEdit(profile);
                       setPinActionType('switch');
                       setEnteredPromptPin('');
                       setPinPromptError('');
                       setPinPromptVisible(true);
                     } else {
-                      // --- REDIRECT: Profile has no PIN (or already active), just switch and go Home ---
                       switchProfile(profile.key);
                       navigation.navigate('Home');
                     }
@@ -273,7 +374,7 @@ export default function ProfileScreen() {
               >
                 <View style={styles.avatarContainer}>
                   {profile.avatarImage ? (
-                    <Image source={{ uri: profile.avatarImage }} style={[styles.avatar, isActive && !isManaging ? { borderWidth: 3, borderColor: theme.text } : { borderWidth: 2, borderColor: 'transparent' }]} />
+                    <Image key={profile.avatarImage} source={{ uri: profile.avatarImage }} style={[styles.avatar, isActive && !isManaging ? { borderWidth: 3, borderColor: theme.text } : { borderWidth: 2, borderColor: 'transparent' }]} />
                   ) : (
                     <LinearGradient colors={gradientColors} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={[styles.avatar, isActive && !isManaging ? { borderWidth: 3, borderColor: theme.text } : { borderWidth: 2, borderColor: 'transparent' }]}>
                       <Text style={styles.avatarText}>{initial}</Text>
@@ -295,7 +396,6 @@ export default function ProfileScreen() {
             );
           })}
           
-          {/* ADD PROFILE BUTTON */}
           {profiles.length < 5 && (
             <TouchableOpacity style={styles.profileWrapper} activeOpacity={0.8} onPress={() => openModal(null)}>
               <View style={[styles.addAvatar, { borderColor: theme.border, backgroundColor: theme.surface }]}>
@@ -306,7 +406,6 @@ export default function ProfileScreen() {
           )}
         </ScrollView>
 
-        {/* MANAGE PROFILES TOGGLE */}
         <View style={styles.manageContainer}>
           <TouchableOpacity 
             style={[styles.manageBtn, { borderColor: theme.border, backgroundColor: isManaging ? theme.surface : 'transparent' }]}
@@ -319,25 +418,54 @@ export default function ProfileScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* SETTINGS SECTIONS */}
         <View style={[styles.sectionContainer, isTablet && styles.sectionContainerTablet]}>
-          <Text style={[styles.sectionHeader, { color: theme.textSecondary }]}>App Settings</Text>
+          <Text style={[styles.sectionHeader, { color: theme.textSecondary }]}>Preferences</Text>
           <View style={[styles.menuBlock, { backgroundColor: theme.surface, borderColor: theme.border }]}>
-            {renderMenuItem('color-palette-outline', 'Dark Mode', 'Toggle app theme', null, true, isDarkMode, toggleTheme)}
+            
+            {renderMenuItem('color-palette-outline', 'Appearance', 'Change app theme', () => setThemeModalVisible(true), false, null, null, themeMode === 'system' ? 'Device Default' : themeMode)}
+            {renderMenuItem('cellular-outline', 'Data Saver', 'Reduce background network usage', null, true, dataSaver, toggleDataSaver)}
+            {renderMenuItem('play-circle-outline', 'Autoplay Trailers', 'Automatically play previews in details', null, true, autoplayTrailers, toggleAutoplayTrailers)}
+          </View>
+        </View>
+
+        <View style={[styles.sectionContainer, isTablet && styles.sectionContainerTablet]}>
+          <Text style={[styles.sectionHeader, { color: theme.textSecondary }]}>Account & Data</Text>
+          <View style={[styles.menuBlock, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+            {renderMenuItem('trash-bin-outline', 'Clear App Cache', 'Free up local device storage', handleClearCache)}
+            {renderMenuItem('help-circle-outline', 'Help Center', 'FAQ & Support', () => {
+              Platform.OS === 'web' ? window.alert('Help Center coming soon!') : Alert.alert('Help Center', 'Coming soon!');
+            })}
           </View>
 
-          {/* SIGN OUT BUTTON */}
           <TouchableOpacity style={[styles.signOutBtn, { backgroundColor: theme.surfaceGlass, borderColor: theme.border }]} onPress={logout}>
             <Text style={[styles.signOutBtnText, { color: theme.text }]}>Sign Out</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>
 
-      {/* ========================================================= */}
-      {/* PIN PROMPT MODAL (Intercepts before edit/switch) */}
-      {/* ========================================================= */}
+      <Modal visible={themeModalVisible} transparent animationType="fade">
+         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setThemeModalVisible(false)}>
+           <View style={[styles.modalCard, { backgroundColor: theme.background, borderColor: theme.border, maxWidth: 300, padding: 20 }]}>
+             <Text style={{color: theme.text, fontSize: 18, fontWeight: 'bold', marginBottom: 15}}>Appearance</Text>
+             
+             {['system', 'light', 'dark'].map((mode) => (
+               <TouchableOpacity 
+                 key={mode} 
+                 onPress={() => handleSelectTheme(mode)} 
+                 style={{flexDirection: 'row', alignItems: 'center', paddingVertical: 14, borderBottomWidth: mode !== 'dark' ? StyleSheet.hairlineWidth : 0, borderBottomColor: theme.border}}
+               >
+                 <Ionicons name={(themeMode || 'system') === mode ? 'radio-button-on' : 'radio-button-off'} size={24} color={(themeMode || 'system') === mode ? theme.primary : theme.textSecondary} />
+                 <Text style={{color: theme.text, fontSize: 16, marginLeft: 12, textTransform: 'capitalize'}}>
+                   {mode === 'system' ? 'Device Default' : mode}
+                 </Text>
+               </TouchableOpacity>
+             ))}
+           </View>
+         </TouchableOpacity>
+      </Modal>
+
       <Modal visible={pinPromptVisible} transparent animationType="fade">
-        <KeyboardWrapper behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalOverlay}>
+        <KeyboardWrapper behavior={Platform.OS === 'ios' ? 'padding' : undefined} enabled={Platform.OS === 'ios'} style={styles.modalOverlay}>
             <View style={[styles.modalCard, { backgroundColor: theme.background, borderColor: theme.border, maxWidth: 350 }]}>
                 
                 <View style={{ alignItems: 'center', marginBottom: 15 }}>
@@ -373,11 +501,8 @@ export default function ProfileScreen() {
         </KeyboardWrapper>
       </Modal>
 
-      {/* ========================================================= */}
-      {/* FLOATING EDIT MODAL */}
-      {/* ========================================================= */}
       <Modal visible={modalVisible} animationType="fade" transparent={true}>
-        <KeyboardWrapper behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalOverlay}>
+        <KeyboardWrapper behavior={Platform.OS === 'ios' ? 'padding' : undefined} enabled={Platform.OS === 'ios'} style={styles.modalOverlay}>
           
           <View style={[styles.modalCard, { backgroundColor: theme.background, borderColor: theme.border }]}>
             <View style={styles.modalHeader}>
@@ -391,7 +516,7 @@ export default function ProfileScreen() {
               <View style={{ alignItems: 'center', marginBottom: 20 }}>
                 <TouchableOpacity onPress={handlePickImage} activeOpacity={0.8} style={styles.avatarPreviewContainer}>
                   {formImage ? (
-                    <Image source={{ uri: formImage }} style={styles.avatarPreview} />
+                    <Image key={formImage} source={{ uri: formImage }} style={styles.avatarPreview} />
                   ) : (
                     <LinearGradient colors={[formColor, getDarkerShade(formColor)]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.avatarPreview}>
                       <Text style={styles.avatarPreviewText}>{formName.trim() ? formName.charAt(0).toUpperCase() : '?'}</Text>
@@ -508,21 +633,29 @@ export default function ProfileScreen() {
 
               <View style={styles.modalActions}>
                 {editingProfileId && profiles.length > 1 ? (
-                  <TouchableOpacity style={styles.deleteBtn} onPress={handleDelete}>
-                    <Text style={styles.deleteBtnText}>Delete</Text>
+                  <TouchableOpacity style={styles.deleteBtn} onPress={handleDelete} disabled={isDeleting}>
+                    {isDeleting ? (
+                      <ActivityIndicator size="small" color="#e51c23" />
+                    ) : (
+                      <Text style={styles.deleteBtnText}>Delete</Text>
+                    )}
                   </TouchableOpacity>
                 ) : <View style={{ flex: 1 }} />}
                 
                 <View style={styles.rightActions}>
-                  <TouchableOpacity style={styles.cancelBtn} onPress={() => setModalVisible(false)}>
+                  <TouchableOpacity style={styles.cancelBtn} onPress={() => setModalVisible(false)} disabled={isSaving || isDeleting}>
                     <Text style={[styles.cancelBtnText, { color: theme.textSecondary }]}>Cancel</Text>
                   </TouchableOpacity>
                   <TouchableOpacity 
                     style={[styles.saveBtn, { backgroundColor: formName.trim() ? theme.text : theme.surfaceGlass }]} 
-                    disabled={!formName.trim()} 
+                    disabled={!formName.trim() || isSaving || isDeleting} 
                     onPress={handleSave}
                   >
-                    <Text style={[styles.saveBtnText, { color: formName.trim() ? theme.background : theme.textSecondary }]}>✓ Save</Text>
+                    {isSaving ? (
+                      <ActivityIndicator size="small" color={formName.trim() ? theme.background : theme.textSecondary} />
+                    ) : (
+                      <Text style={[styles.saveBtnText, { color: formName.trim() ? theme.background : theme.textSecondary }]}>✓ Save</Text>
+                    )}
                   </TouchableOpacity>
                 </View>
               </View>
@@ -553,16 +686,16 @@ const styles = StyleSheet.create({
   manageBtn: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, paddingHorizontal: 16, borderRadius: 20, borderWidth: 1 },
   manageBtnText: { fontSize: 14, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 1 },
 
-  sectionContainer: { paddingHorizontal: SIZES.padding },
+  sectionContainer: { paddingHorizontal: SIZES.padding, marginBottom: 15 },
   sectionContainerTablet: { maxWidth: 600, alignSelf: 'center', width: '100%' },
-  sectionHeader: { fontSize: 14, fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10, marginLeft: 5 },
-  menuBlock: { borderRadius: 12, borderWidth: 1, overflow: 'hidden', marginBottom: 30 },
+  sectionHeader: { fontSize: 13, fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10, marginLeft: 5 },
+  menuBlock: { borderRadius: 12, borderWidth: 1, overflow: 'hidden', marginBottom: 25 },
   menuItem: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 16, paddingHorizontal: 15, borderBottomWidth: StyleSheet.hairlineWidth },
   menuItemLeft: { flexDirection: 'row', alignItems: 'center', flex: 1 },
   menuItemTitle: { fontSize: 16, fontWeight: '500', marginBottom: 2 },
+  menuItemSubtitle: { fontSize: 12 },
   signOutBtn: { paddingVertical: 16, borderRadius: 12, borderWidth: 1, alignItems: 'center', marginBottom: 20 },
   signOutBtnText: { fontSize: 16, fontWeight: 'bold' },
-  versionText: { textAlign: 'center', fontSize: 12, marginBottom: 40 },
 
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'center', alignItems: 'center', padding: 20 },
   modalCard: { width: '100%', maxWidth: 420, borderRadius: 24, padding: 25, borderWidth: 1, maxHeight: '90%' },
@@ -592,12 +725,12 @@ const styles = StyleSheet.create({
   
   actionBtn: { flex: 1, paddingVertical: 14, borderRadius: 12, alignItems: 'center' },
   
-  deleteBtn: { paddingVertical: 10, paddingHorizontal: 15, backgroundColor: 'rgba(229, 28, 35, 0.15)', borderRadius: 12 },
+  deleteBtn: { paddingVertical: 10, paddingHorizontal: 15, backgroundColor: 'rgba(229, 28, 35, 0.15)', borderRadius: 12, minWidth: 70, alignItems: 'center' },
   deleteBtnText: { color: '#e51c23', fontSize: 14, fontWeight: 'bold' },
   
   cancelBtn: { paddingVertical: 12, paddingHorizontal: 20, marginRight: 10 },
   cancelBtnText: { fontSize: 16, fontWeight: '600' },
   
-  saveBtn: { paddingVertical: 12, paddingHorizontal: 24, borderRadius: 25, flexDirection: 'row', alignItems: 'center' },
+  saveBtn: { paddingVertical: 12, paddingHorizontal: 24, borderRadius: 25, flexDirection: 'row', alignItems: 'center', minWidth: 90, justifyContent: 'center' },
   saveBtnText: { fontSize: 16, fontWeight: 'bold' }
 });

@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Nuvix+ | Page Not Found</title>
+  
+  <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@700&display=swap" rel="stylesheet">
+  
+  <style>
+    :root {
+      --bg-dark: #000000;
+      --bg-light: #f5f5f7;
+      --text-main-dark: #ffffff;
+      --text-main-light: #1d1d1f;
+      --accent-gradient: linear-gradient(90deg, #6ae70e 0%, #08fded 20%, #0072ed 60%);
+    }
+
+    /* Support for System Dark/Light Mode */
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: var(--bg-dark);
+      color: var(--text-main-dark);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+
+    @media (prefers-color-scheme: light) {
+      body {
+        background-color: var(--bg-light);
+        color: var(--text-main-light);
+      }
+    }
+
+    /* Cinematic Background Effect */
+    .background-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: radial-gradient(circle at 50% 50%, rgba(0, 114, 237, 0.15), transparent 70%);
+      z-index: 1;
+    }
+
+    .btn-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px; /* Space between icon and text */
+  text-decoration: none;
+  background-color: #ffffff;
+  color: #000000;
+  padding: 12px 28px;
+  /* 999px ensures a perfect pill shape regardless of width */
+  border-radius: 999px; 
+  font-weight: 700;
+  font-size: 1rem;
+  transition: all 0.3s cubic-bezier(0.25, 1, 0.5, 1);
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+  animation: fadeInUp 0.8s ease-out 0.6s both;
+}
+
+.btn-pill:hover {
+  transform: scale(1.05);
+  background-color: #f0f0f0;
+  box-shadow: 0 8px 25px rgba(8, 253, 237, 0.4); /* Matches your brand glow */
+}
+
+.btn-pill:active {
+  transform: scale(0.95);
+}
+
+.house-icon {
+  width: 20px;
+  height: 20px;
+}
+
+/* Ensure the text inside uses your preferred font */
+.btn-pill span {
+  font-family: 'Fredoka', sans-serif;
+}
+
+    /* Main Content Container */
+    .content {
+      position: relative;
+      z-index: 2;
+      text-align: center;
+      padding: 20px;
+      max-width: 600px;
+    }
+
+    /* Logo Implementation matching your MaskedView logic */
+    .logo {
+      font-family: 'Fredoka', sans-serif;
+      font-weight: 700;
+      font-size: 3rem;
+      margin-bottom: 2rem;
+      background: var(--accent-gradient);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      display: inline-block;
+      animation: fadeInDown 0.8s ease-out;
+    }
+
+    .error-number {
+      font-size: 8rem;
+      font-weight: 900;
+      line-height: 1;
+      margin: 0;
+      opacity: 0.8;
+      letter-spacing: -4px;
+      animation: scaleIn 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+
+    .message {
+      font-size: 1.5rem;
+      margin: 1rem 0 2rem;
+      font-weight: 400;
+      color: #a1a1a6;
+      animation: fadeInUp 0.8s ease-out 0.2s both;
+    }
+
+    /* Premium Button Style (Netflix/Apple Style) */
+    .home-button {
+      text-decoration: none;
+      background-color: #ffffff;
+      color: #000000;
+      padding: 14px 32px;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 1rem;
+      transition: all 0.3s ease;
+      display: inline-block;
+      animation: fadeInUp 0.8s ease-out 0.4s both;
+    }
+
+    .home-button:hover {
+      transform: scale(1.05);
+      background-color: #e8e8ed;
+      box-shadow: 0 10px 20px rgba(0,0,0,0.3);
+    }
+
+    /* Animations */
+    @keyframes fadeInDown {
+      from { opacity: 0; transform: translateY(-20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes fadeInUp {
+      from { opacity: 0; transform: translateY(20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes scaleIn {
+      from { opacity: 0; transform: scale(0.8); }
+      to { opacity: 1; transform: scale(1); }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="background-overlay"></div>
+
+  <div class="content">
+    <div class="logo">Nuvix+</div>
+    <h1 class="error-number">404</h1>
+    <p class="message">The content you're looking for has left the library.</p>
+    <a href="/" class="btn-pill">
+  <svg class="house-icon" viewBox="0 0 24 24" fill="currentColor">
+    <path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/>
+  </svg>
+  <span>Back to Home</span>
+</a>
+  </div>
+
+</body>
+</html>

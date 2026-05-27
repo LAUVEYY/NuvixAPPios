@@ -15,7 +15,6 @@ import { SIZES } from '../constants/theme';
 
 const API_KEY = "55550670b2e9a6b8c3c3c69b0bdf894f";
 const BASE_URL = "https://api.themoviedb.org/3";
-const IMG_BASE = "https://image.tmdb.org/t/p/w500";
 
 const CARD_TYPES = { LANDSCAPE: 'landscape', PORTRAIT: 'portrait' };
 const PORTRAIT_WIDTH = 130;
@@ -142,7 +141,8 @@ const HeroInfoBtn = memo(({ onPress, theme }) => {
   );
 });
 
-const ContinueWatchingCard = memo(({ item, theme, navigateToDetails }) => {
+// 🔥 NEW: Contextually Aware Image Fetcher
+const ContinueWatchingCard = memo(({ item, theme, navigateToDetails, imgBase }) => {
   const progress = item.savedProgress || 0;
   const finalType = item.finalType || item.type || item.media_type || 'movie';
   const isTvShow = String(finalType).toLowerCase() === 'tv';
@@ -155,14 +155,11 @@ const ContinueWatchingCard = memo(({ item, theme, navigateToDetails }) => {
       activeOpacity={1} 
       onPressIn={() => Animated.timing(scale, { toValue: 0.96, duration: 60, useNativeDriver: true }).start()} 
       onPressOut={() => Animated.spring(scale, { toValue: 1, friction: 5, tension: 80, useNativeDriver: true }).start()} 
-      
-      // 🔥 THE FIX: Explicitly pass the season and episode memory into the navigation param router!
       onPress={() => navigateToDetails(item.id, finalType, item.last_watched_season, item.last_watched_episode)} 
-      
       style={{ marginRight: CARD_MARGIN }}
     >
       <Animated.View style={[styles.cardWrapper, { width: LANDSCAPE_WIDTH, height: 135, transform: [{ scale }] }]}>
-        <Image source={{ uri: `${IMG_BASE}${imagePath}` }} style={[styles.cardImage, styles.landscapeCard, { borderColor: theme.border }]} />
+        <Image source={{ uri: `${imgBase}${imagePath}` }} style={[styles.cardImage, styles.landscapeCard, { borderColor: theme.border }]} />
         <View style={[StyleSheet.absoluteFillObject, styles.overlayBase]}>
           
           {isTvShow && item.last_watched_season && item.last_watched_episode && (
@@ -190,7 +187,7 @@ const ContinueWatchingCard = memo(({ item, theme, navigateToDetails }) => {
   );
 });
 
-const ContinueWatchingRow = memo(({ data, theme, navigateToDetails }) => {
+const ContinueWatchingRow = memo(({ data, theme, navigateToDetails, imgBase }) => {
   if (!data || data.length === 0) return null;
   const snapInterval = LANDSCAPE_WIDTH + CARD_MARGIN;
   const getItemLayout = (d, index) => ({ length: snapInterval, offset: snapInterval * index, index });
@@ -205,14 +202,14 @@ const ContinueWatchingRow = memo(({ data, theme, navigateToDetails }) => {
         snapToInterval={snapInterval} snapToAlignment="start" decelerationRate="fast"
         getItemLayout={getItemLayout} initialNumToRender={4} windowSize={3}
         renderItem={({ item }) => (
-          <ContinueWatchingCard item={item} theme={theme} navigateToDetails={navigateToDetails} />
+          <ContinueWatchingCard item={item} theme={theme} navigateToDetails={navigateToDetails} imgBase={imgBase} />
         )}
       />
     </View>
   );
 });
 
-const MovieCard = memo(({ item, isPortrait, theme, tappedCardId, setTappedCardId, navigateToDetails }) => {
+const MovieCard = memo(({ item, isPortrait, theme, tappedCardId, setTappedCardId, navigateToDetails, imgBase }) => {
   const isTapped = tappedCardId === item.id;
   const mediaType = item.media_type || (item.name || item.first_air_date ? 'tv' : 'movie');
   const [bannerText, setBannerText] = useState(null);
@@ -321,7 +318,8 @@ const MovieCard = memo(({ item, isPortrait, theme, tappedCardId, setTappedCardId
   return (
     <TouchableOpacity activeOpacity={1} delayPressIn={0} onPressIn={handlePressIn} onPressOut={handlePressOut} onPress={handlePress} style={{ marginRight: CARD_MARGIN }}>
       <Animated.View style={[styles.cardWrapper, { transform: [{ scale: cardScale }] }]}>
-        <Image source={{ uri: `${IMG_BASE}${isPortrait ? item.poster_path : item.backdrop_path}` }} style={[styles.cardImage, isPortrait ? styles.portraitCard : styles.landscapeCard, { borderColor: theme.border }]} />
+        {/* 🔥 Data Saver Logic Applied */}
+        <Image source={{ uri: `${imgBase}${isPortrait ? item.poster_path : item.backdrop_path}` }} style={[styles.cardImage, isPortrait ? styles.portraitCard : styles.landscapeCard, { borderColor: theme.border }]} />
         
         {isFullyWatched && <View style={styles.watchedOverlay} />}
         
@@ -361,7 +359,7 @@ const MovieCard = memo(({ item, isPortrait, theme, tappedCardId, setTappedCardId
   );
 });
 
-const MovieRow = memo(({ title, data, type, theme, tappedCardId, setTappedCardId, navigateToDetails }) => {
+const MovieRow = memo(({ title, data, type, theme, tappedCardId, setTappedCardId, navigateToDetails, imgBase }) => {
   if (!data || data.length === 0) return null;
   const isPortrait = type === CARD_TYPES.PORTRAIT;
   const snapInterval = isPortrait ? (PORTRAIT_WIDTH + CARD_MARGIN) : (LANDSCAPE_WIDTH + CARD_MARGIN);
@@ -381,7 +379,7 @@ const MovieRow = memo(({ title, data, type, theme, tappedCardId, setTappedCardId
         renderItem={({ item }) => (
           <MovieCard 
             item={item} isPortrait={isPortrait} theme={theme} tappedCardId={tappedCardId} 
-            setTappedCardId={setTappedCardId} navigateToDetails={navigateToDetails} 
+            setTappedCardId={setTappedCardId} navigateToDetails={navigateToDetails} imgBase={imgBase}
           />
         )}
       />
@@ -390,11 +388,16 @@ const MovieRow = memo(({ title, data, type, theme, tappedCardId, setTappedCardId
 });
 
 export default function HomeScreen() {
-  const { theme, isDarkMode } = useContext(ThemeContext);
+  // 🔥 EXTRACTING DATA SAVER PREFERENCE
+  const { theme, isDarkMode, dataSaver } = useContext(ThemeContext);
   const { toggleWatchlist, isInWatchlist, history } = useContext(LibraryContext); 
   const navigation = useNavigation();
   const route = useRoute();
   
+  // DYNAMIC IMAGE QUALITIES
+  const imgQualityBase = dataSaver ? "https://image.tmdb.org/t/p/w342" : "https://image.tmdb.org/t/p/w500";
+  const heroQualityBase = dataSaver ? "https://image.tmdb.org/t/p/w780" : "https://image.tmdb.org/t/p/original";
+
   const { width, height } = useWindowDimensions();
   const isTablet = width >= 768;
   const isTabletLandscape = isTablet && width > height;
@@ -458,7 +461,17 @@ export default function HomeScreen() {
                 }
             }
 
-            const p = Math.max(item.savedProgress || 0, localProg);
+            let cloudProg = 0;
+            if (item.progressMap) {
+                if (mediaType === 'movie') {
+                    cloudProg = item.progressMap['1-1'] || 0;
+                } else if (item.last_watched_season && item.last_watched_episode) {
+                    cloudProg = item.progressMap[`${item.last_watched_season}-${item.last_watched_episode}`] || 0;
+                }
+            }
+
+            let p = Math.max(item.savedProgress || 0, localProg, cloudProg);
+            if (isNaN(p)) p = 0;
             
             if (mediaType === 'movie') {
                 if (p > 0 && p < 0.95) cwList.push({...item, savedProgress: p, finalType: mediaType});
@@ -679,7 +692,6 @@ export default function HomeScreen() {
     }
   }).current;
 
-  // 🔥 THE FIX: Now safely injects the specific Season and Episode into the DetailsScreen router!
   const navigateToDetails = useCallback((id, media_type, season = null, episode = null) => {
     const type = media_type || (id > 100000 ? 'movie' : 'tv');
     setTappedCardId(null);
@@ -726,7 +738,8 @@ export default function HomeScreen() {
 
     return (
       <Animated.View style={[styles.heroContainer, { width: heroWidth, height: heroHeight, opacity, transform: [{ scale }] }]}>
-        <Image source={{ uri: `https://image.tmdb.org/t/p/original${heroImagePath}` }} style={styles.heroImage} />
+        {/* 🔥 Data Saver Logic Applied */}
+        <Image source={{ uri: `${heroQualityBase}${heroImagePath}` }} style={styles.heroImage} />
         
         <LinearGradient colors={['rgba(0,0,0,0.85)', 'transparent']} style={styles.heroGradientTop}/>
         <LinearGradient colors={['transparent', gradientMiddle, theme.background]} style={styles.heroGradientBottom}/>
@@ -734,7 +747,7 @@ export default function HomeScreen() {
 
         <View style={[styles.heroContent, isTablet && styles.heroContentTablet]}>
           {logoObj ? (
-            <Image source={{ uri: `${IMG_BASE}${logoObj.file_path}` }} style={styles.heroLogo} resizeMode="contain" />
+            <Image source={{ uri: `https://image.tmdb.org/t/p/w300${logoObj.file_path}` }} style={styles.heroLogo} resizeMode="contain" />
           ) : (
             <Text style={[styles.heroTitleText, { color: theme.text, textShadowColor: shadowColor }]}>{item.title || item.name}</Text>
           )}
@@ -815,12 +828,12 @@ export default function HomeScreen() {
                 />
             </View>
             
-            <ContinueWatchingRow data={continueWatchingData} theme={theme} navigateToDetails={navigateToDetails} />
+            <ContinueWatchingRow data={continueWatchingData} theme={theme} navigateToDetails={navigateToDetails} imgBase={imgQualityBase} />
           </View>
         }
         
         renderItem={({ item }) => (
-          <MovieRow title={item.title} data={item.data} type={item.type} theme={theme} tappedCardId={tappedCardId} setTappedCardId={setTappedCardId} navigateToDetails={navigateToDetails} />
+          <MovieRow title={item.title} data={item.data} type={item.type} theme={theme} tappedCardId={tappedCardId} setTappedCardId={setTappedCardId} navigateToDetails={navigateToDetails} imgBase={imgQualityBase} />
         )}
         
         ListFooterComponent={
