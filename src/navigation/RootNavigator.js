@@ -1,5 +1,5 @@
 // src/navigation/RootNavigator.js
-import React, { useContext, useEffect } from 'react';
+import React, { useContext, useEffect, useState } from 'react';
 import { useWindowDimensions, View, Text, Platform, StyleSheet, ActivityIndicator } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createDrawerNavigator, DrawerContentScrollView, DrawerItemList } from '@react-navigation/drawer'; 
@@ -7,6 +7,8 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context'; 
 import * as ScreenOrientation from 'expo-screen-orientation'; 
+import * as Linking from 'expo-linking';
+import { useNavigation } from '@react-navigation/native';
 
 import { ThemeContext } from '../context/ThemeContext';
 import { AuthContext } from '../context/AuthContext'; 
@@ -23,13 +25,14 @@ import SearchScreen from '../screens/SearchScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import LibraryScreen from '../screens/LibraryScreen';
 import DetailsScreen from '../screens/DetailsScreen';
+import SharedMixtapeScreen from '../screens/SharedMixtapeScreen';
 
 const Tab = createBottomTabNavigator();
 const Drawer = createDrawerNavigator();
 const Stack = createNativeStackNavigator();
 
 // ============================================================================
-// 1. MOBILE BOTTOM TABS (🔥 Fixed PWA Floating Gap & 3-Button Nav)
+// 1. MOBILE BOTTOM TABS
 // ============================================================================
 const MobileNavigator = () => {
   const { theme } = useContext(ThemeContext);
@@ -37,15 +40,14 @@ const MobileNavigator = () => {
   
   const isWeb = Platform.OS === 'web';
 
-  // For native Android/iOS, we rely on the standard insets or our safe fallbacks
-  const nativeSafeBottom = insets.bottom > 0 ? insets.bottom : (Platform.OS === 'ios' ? 20 : 10);
-  const baseTabBarHeight = 60; 
+  // 🔥 FIX: Dynamic height. Web gets a taller 58px base to compensate for browser UI.
+  // Native stays at the sleek 48px because `nativeSafeBottom` adds the physical device lift.
+  const nativeSafeBottom = Math.max(insets.bottom, 0); 
+  const baseTabBarHeight = isWeb ? 58 : 48; 
   const nativeTotalHeight = baseTabBarHeight + nativeSafeBottom;
 
   return (
     <Tab.Navigator
-      // Web: Push content up using dynamic CSS so it never hides behind the fixed tab bar
-      // Native: Use standard numeric height padding
       sceneContainerStyle={{ 
         paddingBottom: isWeb ? `calc(${baseTabBarHeight}px + env(safe-area-inset-bottom))` : nativeTotalHeight 
       }}
@@ -54,27 +56,25 @@ const MobileNavigator = () => {
         header: () => <TopBar />, 
         
         tabBarIcon: ({ focused, color }) => {
-          let iconName;
+          let iconName = 'albums'; 
           if (route.name === 'Home') iconName = focused ? 'home' : 'home-outline';
           else if (route.name === 'Browse') iconName = focused ? 'grid' : 'grid-outline';
           else if (route.name === 'Search') iconName = focused ? 'search' : 'search-outline';
           else if (route.name === 'Library') iconName = focused ? 'bookmark' : 'bookmark-outline';
           else if (route.name === 'Profile') iconName = focused ? 'person' : 'person-outline';
 
-          return <Ionicons name={iconName} size={26} color={color} />;
+          return <Ionicons name={iconName} size={24} color={color} />;
         },
         tabBarActiveTintColor: theme.primary,
         tabBarInactiveTintColor: theme.textSecondary,
         tabBarShowLabel: false, 
         
-        tabBarItemStyle: {
+        tabBarItemStyle: route.name === 'SharedMixtape' ? { display: 'none' } : {
           justifyContent: 'center',
           alignItems: 'center',
-          paddingTop: Platform.OS === 'ios' || isWeb ? 8 : 0, 
+          paddingTop: isWeb ? 6 : (Platform.OS === 'ios' ? 2 : 0), // Adjusted padding to keep icons perfectly centered
         },
 
-        // 🔥 THE FIX: Web uses 'fixed' to completely ignore parent wrapper gaps 
-        // and snaps straight to the physical screen edge.
         tabBarStyle: {
           position: isWeb ? 'fixed' : 'absolute',
           bottom: 0,
@@ -84,7 +84,6 @@ const MobileNavigator = () => {
           borderTopWidth: 1, 
           borderTopColor: theme.border,
           backgroundColor: theme.surface, 
-          // Use native CSS variables on web to perfectly stretch the background into the home indicator area
           height: isWeb ? `calc(${baseTabBarHeight}px + env(safe-area-inset-bottom))` : nativeTotalHeight, 
           paddingBottom: isWeb ? 'env(safe-area-inset-bottom)' : nativeSafeBottom, 
         },
@@ -99,12 +98,18 @@ const MobileNavigator = () => {
       <Tab.Screen name="Search" component={SearchScreen} />
       <Tab.Screen name="Library" component={LibraryScreen} />
       <Tab.Screen name="Profile" component={ProfileScreen} />
+      
+      <Tab.Screen 
+        name="SharedMixtape" 
+        component={SharedMixtapeScreen} 
+        options={{ tabBarButton: () => null }} 
+      />
     </Tab.Navigator>
   );
 };
 
 // ============================================================================
-// 2. CUSTOM SIDEBAR HEADER (NUVIX+ TEXT)
+// 2. CUSTOM SIDEBAR HEADER (Tablet)
 // ============================================================================
 const CustomDrawerContent = (props) => {
   return (
@@ -112,12 +117,10 @@ const CustomDrawerContent = (props) => {
       <View style={{ paddingHorizontal: 25, paddingTop: 40, paddingBottom: 30, justifyContent: 'center' }}>
         
         <View style={styles.logoContainer}>
-          {/* 1. The Drop Shadow layer */}
           <Text style={[styles.logoText, styles.shadowText]}>
             Nuvix+
           </Text>
 
-          {/* 2. The Gradient Text layer */}
           {Platform.OS === 'web' ? (
             <Text
               style={[
@@ -175,7 +178,7 @@ const styles = StyleSheet.create({
 });
 
 // ============================================================================
-// 3. TABLET DRAWER NAVIGATOR (For iPads / Large Screens)
+// 3. TABLET DRAWER NAVIGATOR
 // ============================================================================
 const TabletNavigator = () => {
   const { theme } = useContext(ThemeContext);
@@ -225,43 +228,104 @@ const TabletNavigator = () => {
         component={ProfileScreen} 
         options={{ drawerIcon: ({color}) => <Ionicons name="person-outline" size={22} color={color} /> }} 
       />
+      
+      <Drawer.Screen 
+        name="SharedMixtape" 
+        component={SharedMixtapeScreen} 
+        options={{ drawerItemStyle: { display: 'none' } }} 
+      />
     </Drawer.Navigator>
   );
 };
 
 // ============================================================================
-// 4. MAIN ROOT STACK (3-TIER GATEKEEPER APPLIED HERE)
+// 4. MAIN ROOT STACK
 // ============================================================================
 export default function RootNavigator() {
   const { width, height } = useWindowDimensions();
+  const navigation = useNavigation();
   
-  // Grab the Auth state
   const { activeProfileKey, user, isGuest, loading } = useContext(AuthContext); 
   
-  // Robust check: iOS uses native isPad flag, Android checks if shortest screen side is >= 600
-  const isTabletDevice = Platform.OS === 'ios' ? Platform.isPad : Math.min(width, height) >= 600; 
+  const [pendingMixtapeId, setPendingMixtapeId] = useState(null);
+  const [pendingIsCollab, setPendingIsCollab] = useState(false);
+  const [pendingMedia, setPendingMedia] = useState(null); 
   
-  // Check if the device is currently rotated into Landscape mode
+  const isTabletDevice = Platform.OS === 'ios' ? Platform.isPad : Math.min(width, height) >= 600; 
   const isLandscape = width > height;
-
-  // Only use the Sidebar Drawer if it's a tablet AND it's in Landscape
   const useSidebar = isTabletDevice && isLandscape;
 
-  // THE ORIENTATION MANAGER
   useEffect(() => {
     async function lockOrientation() {
       if (isTabletDevice) {
-        // Tablets: Free rotation (Landscape & Portrait)
         await ScreenOrientation.unlockAsync();
       } else {
-        // Phones: Strictly locked to Portrait 
         await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
       }
     }
     lockOrientation();
   }, [isTabletDevice]);
 
-  // Loading Screen while Firebase checks credentials on boot
+  useEffect(() => {
+    const handleUrl = (url) => {
+      if (!url) return;
+      
+      if (url.includes('collab/')) {
+        const id = url.split('collab/')[1]?.split('?')[0]?.split('/')[0];
+        if (id) {
+          setPendingMixtapeId(id);
+          setPendingIsCollab(true);
+        }
+      }
+      else if (url.includes('mixtape/')) {
+        const id = url.split('mixtape/')[1]?.split('?')[0]?.split('/')[0];
+        if (id) {
+          setPendingMixtapeId(id);
+          setPendingIsCollab(false);
+        }
+      } 
+      else if (url.includes('movie/')) {
+        const id = url.split('movie/')[1]?.split('?')[0]?.split('/')[0];
+        if (id) setPendingMedia({ id, type: 'movie' });
+      } 
+      else if (url.includes('tv/')) {
+        const id = url.split('tv/')[1]?.split('?')[0]?.split('/')[0];
+        if (id) setPendingMedia({ id, type: 'tv' });
+      }
+    };
+
+    Linking.getInitialURL().then(handleUrl);
+    const subscription = Linking.addEventListener('url', ({ url }) => handleUrl(url));
+    return () => subscription.remove();
+  }, []);
+
+  useEffect(() => {
+    if (activeProfileKey) {
+      if (pendingMixtapeId) {
+        const timer = setTimeout(() => {
+           navigation.navigate('MainTabs', { 
+             screen: 'SharedMixtape', 
+             params: { 
+               mixtapeId: pendingMixtapeId, 
+               isCollab: pendingIsCollab 
+             } 
+           });
+           setPendingMixtapeId(null);
+           setPendingIsCollab(false);
+        }, 300);
+        return () => clearTimeout(timer);
+      }
+
+      if (pendingMedia) {
+        const timer = setTimeout(() => {
+           navigation.navigate('Details', { id: pendingMedia.id, type: pendingMedia.type });
+           setPendingMedia(null);
+        }, 300);
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [activeProfileKey, pendingMixtapeId, pendingIsCollab, pendingMedia, navigation]);
+
   if (loading) {
     return (
       <View style={{ flex: 1, backgroundColor: '#000', justifyContent: 'center', alignItems: 'center' }}>
@@ -272,25 +336,16 @@ export default function RootNavigator() {
 
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
-      
-      {/* 🛑 LEVEL 1 GATEKEEPER: Are they logged in or a Guest? */}
       {(!user && !isGuest) ? (
         <Stack.Screen name="Auth" component={AuthScreen} />
-      ) : 
-      
-      /* 🛑 LEVEL 2 GATEKEEPER: Have they selected a profile? */
-      !activeProfileKey ? (
+      ) : !activeProfileKey ? (
         <Stack.Screen name="ProfileSelection" component={ProfileSelectionScreen} />
       ) : (
-        
-      /* ✅ LEVEL 3: Access Granted to Main App */
         <>
           <Stack.Screen 
              name="MainTabs" 
-             // Switches instantly to Bottom Tabs if portrait, or Sidebar if landscape!
              component={useSidebar ? TabletNavigator : MobileNavigator} 
           />
-          
           <Stack.Screen 
             name="Details" 
             component={DetailsScreen} 

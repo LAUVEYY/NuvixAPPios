@@ -94,9 +94,14 @@ export default function TopBar() {
     <Animated.View style={[
       styles.container, 
       { 
-        // If it's Home, use the fading animation. Otherwise, force a solid background.
+        // 1. Overlay globally ONLY on Home screen. Otherwise flow normally.
+        position: isHome ? 'absolute' : 'relative',
+        top: isHome ? 0 : undefined,
+        left: isHome ? 0 : undefined,
         backgroundColor: isHome ? animatedBgColor : theme.background, 
-        paddingTop: topPadding 
+        paddingTop: topPadding,
+        // 2. THE MAGIC FIX: Cancel out the screen double-padding natively
+        marginBottom: isHome ? 0 : -topPadding
       }
     ]}>
       
@@ -135,7 +140,6 @@ export default function TopBar() {
         </View>
       </View>
 
-      {/* DROPDOWN MENU */}
       <Modal visible={dropdownVisible} transparent={true} animationType="fade">
         <TouchableWithoutFeedback onPress={() => setDropdownVisible(false)}>
           <View style={styles.modalOverlay}>

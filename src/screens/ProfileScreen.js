@@ -2,7 +2,7 @@
 import React, { useState, useContext, useEffect } from 'react';
 import { 
   View, Text, StyleSheet, ScrollView, TouchableOpacity, 
-  Switch, useWindowDimensions, Modal, TextInput, KeyboardAvoidingView, Platform, Image, Alert, ActivityIndicator
+  Switch, useWindowDimensions, Modal, TextInput, KeyboardAvoidingView, Platform, Image, ActivityIndicator
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -78,9 +78,13 @@ export default function ProfileScreen() {
   
   const [themeModalVisible, setThemeModalVisible] = useState(false);
 
+  // Custom alert UI State
+  const [alertConfig, setAlertConfig] = useState({ visible: false, title: '', message: '', type: 'alert', onConfirm: null });
+  const showAlert = (title, message) => setAlertConfig({ visible: true, title, message, type: 'alert', onConfirm: null });
+  const showConfirm = (title, message, onConfirm) => setAlertConfig({ visible: true, title, message, type: 'confirm', onConfirm });
+
   const handleClearCache = () => {
-    const msg = 'Temporary app cache has been successfully cleared, freeing up storage.';
-    Platform.OS === 'web' ? window.alert(msg) : Alert.alert('Cache Cleared', msg);
+    showAlert('Cache Cleared', 'Temporary app cache has been successfully cleared, freeing up storage.');
   };
 
   const handleSelectTheme = (mode) => {
@@ -123,7 +127,7 @@ export default function ProfileScreen() {
       setFormConfirmPin('');
     } else {
       if (profiles.length >= 5) {
-        Alert.alert('Limit Reached', 'You can only have up to 5 profiles.');
+        showAlert('Limit Reached', 'You can only have up to 5 profiles.');
         return;
       }
       setEditingProfileId(null);
@@ -228,12 +232,7 @@ export default function ProfileScreen() {
     if (hasError) return;
 
     if (formImage && formImage.length > 1000000) {
-        const errorMsg = "The selected image is too large (over 1MB). Please select a smaller photo.";
-        if (Platform.OS === 'web') {
-            window.alert(errorMsg);
-        } else {
-            Alert.alert('Image Too Large', errorMsg);
-        }
+        showAlert('Image Too Large', "The selected image is too large (over 1MB). Please select a smaller photo.");
         return;
     }
 
@@ -263,11 +262,7 @@ export default function ProfileScreen() {
       setIsManaging(false);
     } catch (e) {
       console.error(e);
-      if (Platform.OS === 'web') {
-          window.alert("Failed to save profile.");
-      } else {
-          Alert.alert("Error", "Failed to save profile.");
-      }
+      showAlert("Error", "Failed to save profile.");
     } finally {
       setIsSaving(false);
     }
@@ -280,11 +275,7 @@ export default function ProfileScreen() {
       if (success) {
         setModalVisible(false);
         setIsManaging(false);
-        if (Platform.OS === 'web') {
-          window.alert('Profile successfully deleted.');
-        } else {
-          Alert.alert('Success', 'Profile successfully deleted.');
-        }
+        showAlert('Success', 'Profile successfully deleted.');
       }
     } catch (e) {
       console.error(e);
@@ -294,16 +285,7 @@ export default function ProfileScreen() {
   };
 
   const handleDelete = () => {
-    if (Platform.OS === 'web') {
-      if (window.confirm('Are you sure you want to delete this profile?')) {
-        executeDelete();
-      }
-    } else {
-      Alert.alert('Delete Profile', 'Are you sure you want to delete this profile?', [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Delete', style: 'destructive', onPress: executeDelete }
-      ]);
-    }
+      showConfirm('Delete Profile', 'Are you sure you want to delete this profile?', executeDelete);
   };
 
   const renderMenuItem = (icon, title, subtitle, onPress, showToggle = false, toggleValue, onToggle, valueText = null) => (
@@ -432,9 +414,7 @@ export default function ProfileScreen() {
           <Text style={[styles.sectionHeader, { color: theme.textSecondary }]}>Account & Data</Text>
           <View style={[styles.menuBlock, { backgroundColor: theme.surface, borderColor: theme.border }]}>
             {renderMenuItem('trash-bin-outline', 'Clear App Cache', 'Free up local device storage', handleClearCache)}
-            {renderMenuItem('help-circle-outline', 'Help Center', 'FAQ & Support', () => {
-              Platform.OS === 'web' ? window.alert('Help Center coming soon!') : Alert.alert('Help Center', 'Coming soon!');
-            })}
+            {renderMenuItem('help-circle-outline', 'Help Center', 'FAQ & Support', () => showAlert('Help Center', 'Coming soon!'))}
           </View>
 
           <TouchableOpacity style={[styles.signOutBtn, { backgroundColor: theme.surfaceGlass, borderColor: theme.border }]} onPress={logout}>
@@ -664,6 +644,33 @@ export default function ProfileScreen() {
         </KeyboardWrapper>
       </Modal>
 
+      {/* UNIFIED ALERT MODAL */}
+      <Modal visible={alertConfig.visible} transparent animationType="fade">
+         <View style={styles.alertOverlay}>
+            <View style={[styles.alertCard, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+               <Ionicons name={alertConfig.type === 'confirm' ? "warning-outline" : "information-circle-outline"} size={40} color={alertConfig.type === 'confirm' ? "#e51c23" : theme.text} style={{marginBottom: 15}} />
+               <Text style={[styles.alertTitle, { color: theme.text }]}>{alertConfig.title}</Text>
+               <Text style={[styles.alertMessage, { color: theme.textSecondary }]}>{alertConfig.message}</Text>
+               <View style={{ flexDirection: 'row', gap: 10, marginTop: 10 }}>
+                  {alertConfig.type === 'confirm' && (
+                     <TouchableOpacity style={[styles.alertButtonCancel, { backgroundColor: theme.surfaceGlass }]} onPress={() => setAlertConfig({ ...alertConfig, visible: false })}>
+                        <Text style={[styles.alertButtonText, { color: theme.text }]}>Cancel</Text>
+                     </TouchableOpacity>
+                  )}
+                  <TouchableOpacity 
+                    style={[styles.alertButton, { backgroundColor: alertConfig.type === 'confirm' ? '#e51c23' : theme.primary }]} 
+                    onPress={() => { 
+                        setAlertConfig({ ...alertConfig, visible: false }); 
+                        if (alertConfig.onConfirm) alertConfig.onConfirm(); 
+                    }}
+                  >
+                     <Text style={styles.alertButtonText}>{alertConfig.type === 'confirm' ? 'Delete' : 'OK'}</Text>
+                  </TouchableOpacity>
+               </View>
+            </View>
+         </View>
+      </Modal>
+
     </View>
   );
 }
@@ -732,5 +739,13 @@ const styles = StyleSheet.create({
   cancelBtnText: { fontSize: 16, fontWeight: '600' },
   
   saveBtn: { paddingVertical: 12, paddingHorizontal: 24, borderRadius: 25, flexDirection: 'row', alignItems: 'center', minWidth: 90, justifyContent: 'center' },
-  saveBtnText: { fontSize: 16, fontWeight: 'bold' }
+  saveBtnText: { fontSize: 16, fontWeight: 'bold' },
+
+  alertOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center', padding: 20 },
+  alertCard: { width: '100%', maxWidth: 320, borderRadius: 16, padding: 20, borderWidth: 1, alignItems: 'center' },
+  alertTitle: { fontSize: 18, fontWeight: 'bold', marginBottom: 10, textAlign: 'center' },
+  alertMessage: { fontSize: 14, textAlign: 'center', marginBottom: 20 },
+  alertButton: { flex: 1, paddingVertical: 12, paddingHorizontal: 20, borderRadius: 25, alignItems: 'center' },
+  alertButtonCancel: { flex: 1, paddingVertical: 12, paddingHorizontal: 20, borderRadius: 25, alignItems: 'center' },
+  alertButtonText: { color: '#fff', fontWeight: 'bold', fontSize: 16 }
 });

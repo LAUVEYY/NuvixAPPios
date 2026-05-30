@@ -18,8 +18,8 @@ import {
   sendEmailVerification, 
   signOut,
   getAuth,
-  applyActionCode, // 🔥 NEW: For handling the email verification link
-  confirmPasswordReset // 🔥 NEW: For handling the password reset link
+  applyActionCode, 
+  confirmPasswordReset 
 } from 'firebase/auth';
 
 const firebaseConfig = {
@@ -66,6 +66,7 @@ export const AuthProvider = ({ children }) => {
   const [authReady, setAuthReady] = useState(false); 
 
   const [profiles, setProfiles] = useState([]);
+  // Defaults to null so the "Who's Watching" gatekeeper is always triggered
   const [activeProfileKey, setActiveProfileKey] = useState(null);
 
   const activeProfile = profiles.find(p => p.key === activeProfileKey) || profiles[0];
@@ -81,12 +82,9 @@ export const AuthProvider = ({ children }) => {
     return `h_${hash}`;
   };
 
-  // 🔥 THE ROUTING BRAIN: Tells Firebase how to handle Deep Links (App vs Web)
   const actionCodeSettings = {
-    // Replace with your final deployed web domain (e.g., 'https://nuvix.fun')
     url: 'https://nuvix-plus-social.firebaseapp.com', 
     handleCodeInApp: true,
-    // Replace these with your actual app package IDs when deploying to App Stores
     iOS: { bundleId: 'com.nuvix.app' },
     android: { packageName: 'com.nuvix.app', installApp: true, minimumVersion: '1' }
   };
@@ -121,10 +119,7 @@ export const AuthProvider = ({ children }) => {
           if (loadedProfiles.length === 0) {
             if (snapshot.metadata.fromCache) {
                 console.warn("Offline with empty cache. Aborting profile creation. Falling back to Guest.");
-                Alert.alert(
-                    "Connection Error", 
-                    "Could not reach the server to load your profiles. Continuing in Guest Mode."
-                );
+                Alert.alert("Connection Error", "Could not reach the server to load your profiles. Continuing in Guest Mode.");
                 setIsGuest(true);
                 return; 
             }
@@ -137,6 +132,7 @@ export const AuthProvider = ({ children }) => {
             await profilesRef.doc(defaultProfile.key).set(defaultProfile);
             loadedProfiles = [defaultProfile];
           }
+          
           setProfiles(loadedProfiles);
           setActiveProfileKey(null);
 
@@ -152,6 +148,7 @@ export const AuthProvider = ({ children }) => {
             loadedProfiles = [defaultProfile];
             await AsyncStorage.setItem(PROFILES_KEY, JSON.stringify(loadedProfiles));
           }
+          
           setProfiles(loadedProfiles);
           setActiveProfileKey(null);
         }
@@ -182,7 +179,6 @@ export const AuthProvider = ({ children }) => {
 
   const signup = async (email, password) => {
     const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-    // Attach the actionCodeSettings to trigger the Deep Link
     await sendEmailVerification(userCredential.user, actionCodeSettings);
     
     await db.collection('users').doc(userCredential.user.uid).set({
@@ -195,11 +191,9 @@ export const AuthProvider = ({ children }) => {
   };
 
   const resetPassword = async (email) => {
-    // Attach the actionCodeSettings to trigger the Deep Link
     await sendPasswordResetEmail(auth, email, actionCodeSettings);
   };
 
-  // 🔥 NEW: Deep Link Handlers
   const verifyEmailCode = async (code) => {
     return await applyActionCode(auth, code);
   };
@@ -218,7 +212,9 @@ export const AuthProvider = ({ children }) => {
   };
 
   // --- 4. PROFILE ACTIONS ---
-  const switchProfile = (key) => { setActiveProfileKey(key); };
+  const switchProfile = (key) => { 
+    setActiveProfileKey(key); 
+  };
 
   const addProfile = async (profileData) => {
     const { name, password, avatarColor, avatarImage } = profileData;
@@ -267,7 +263,10 @@ export const AuthProvider = ({ children }) => {
 
     const updatedProfiles = profiles.filter(p => p.key !== profileKey);
     setProfiles(updatedProfiles);
-    if (activeProfileKey === profileKey) switchProfile(updatedProfiles[0].key);
+    
+    if (activeProfileKey === profileKey) {
+        switchProfile(updatedProfiles[0].key);
+    }
 
     if (user && !isGuest) {
       await db.collection('users').doc(user.uid).collection('profiles').doc(profileKey).delete();
@@ -286,7 +285,7 @@ export const AuthProvider = ({ children }) => {
   return (
     <AuthContext.Provider value={{ 
       user, isGuest, loading, login, signup, resetPassword, loginAsGuest, logout,
-      verifyEmailCode, confirmNewPassword, // 🔥 Exported the Deep Link Handlers
+      verifyEmailCode, confirmNewPassword,
       profiles, activeProfile, activeProfileKey, switchProfile,
       addProfile, updateProfile, removeProfile, verifyPassword, AVATAR_COLORS
     }}>

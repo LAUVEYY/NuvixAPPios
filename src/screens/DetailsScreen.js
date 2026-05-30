@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useContext, useRef } from 'react';
 import { 
   View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, 
-  ActivityIndicator, useWindowDimensions, FlatList, Share, Alert, Platform, Dimensions, Animated, Modal, TextInput, KeyboardAvoidingView
+  ActivityIndicator, useWindowDimensions, FlatList, Share, Platform, Dimensions, Animated, Modal, TextInput, KeyboardAvoidingView, PanResponder
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
@@ -15,6 +15,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { ThemeContext } from '../context/ThemeContext';
 import { LibraryContext } from '../context/LibraryContext'; 
+import { AuthContext } from '../context/AuthContext'; 
 import { SIZES } from '../constants/theme';
 
 const KeyboardWrapper = Platform.OS === 'ios' ? KeyboardAvoidingView : View;
@@ -62,8 +63,8 @@ const MixtapeCover = ({ mixtape, theme }) => {
 
   if (items.length === 0) {
       return (
-          <View style={[styles.mixCoverBase, { backgroundColor: theme.surface, borderColor: theme.border, justifyContent: 'center', alignItems: 'center' }]}>
-              <Ionicons name="musical-notes" size={20} color={theme.textSecondary} />
+          <View style={[styles.mixCoverBase, { backgroundColor: theme.surface, borderColor: theme.border, justifyContent: 'center', alignItems: 'center', flexDirection: 'column', flexWrap: 'nowrap' }]}>
+              <Ionicons name="film-outline" size={24} color={theme.textSecondary} />
           </View>
       );
   }
@@ -112,13 +113,14 @@ const MixtapeCover = ({ mixtape, theme }) => {
 
 export default function DetailsScreen() {
   const { theme, isDarkMode, dataSaver, autoplayTrailers } = useContext(ThemeContext);
+  const { activeProfile } = useContext(AuthContext); 
   
   const imgQualityLogo = dataSaver ? 'w342' : 'w500';
   const imgQualityHero = dataSaver ? 'w780' : 'original';
   const imgQualityCast = dataSaver ? 'w92' : 'w185';
   const imgQualityEp = dataSaver ? 'w342' : 'w500';
 
-  const { toggleWatchlist, isInWatchlist, addToHistory, watchlist, history, mixtapes, createMixtape, toggleInMixtape, updateMixtapeStyle, deleteMixtape } = useContext(LibraryContext); 
+  const { toggleWatchlist, isInWatchlist, addToHistory, watchlist, history, mixtapes, createMixtape, toggleInMixtape, updateMixtapeStyle, deleteMixtape, leaveCollaborativeMixtape } = useContext(LibraryContext); 
   
   const navigation = useNavigation();
   const route = useRoute();
@@ -159,11 +161,47 @@ export default function DetailsScreen() {
   const [showNewMixForm, setShowNewMixForm] = useState(false);
   const [newMixtapeName, setNewMixtapeName] = useState('');
   const [newMixtapeDesc, setNewMixtapeDesc] = useState('');
+  const [loadingMixId, setLoadingMixId] = useState(null);
   
   const [editMixModalVisible, setEditMixModalVisible] = useState(false);
   const [activeEditMix, setActiveEditMix] = useState(null);
   const [mixTitleEdit, setMixTitleEdit] = useState('');
   const [mixDescEdit, setMixDescEdit] = useState('');
+
+  const [alertConfig, setAlertConfig] = useState({ visible: false, title: '', message: '' });
+  const showAlert = (title, message) => setAlertConfig({ visible: true, title, message });
+
+  const panY = useRef(new Animated.Value(0)).current;
+
+  const panResponder = useRef(
+      PanResponder.create({
+          onStartShouldSetPanResponder: () => true, 
+          onMoveShouldSetPanResponder: (_, gestureState) => {
+              return gestureState.dy > 5 && Math.abs(gestureState.dy) > Math.abs(gestureState.dx);
+          },
+          onPanResponderMove: (_, gestureState) => {
+              if (gestureState.dy > 0) { panY.setValue(gestureState.dy); }
+          },
+          onPanResponderRelease: (_, gestureState) => {
+              if (gestureState.dy > 120 || gestureState.vy > 1.0) {
+                  Animated.timing(panY, {
+                      toValue: Dimensions.get('window').height, duration: 250, useNativeDriver: true
+                  }).start(() => {
+                      setMixtapeModalVisible(false);
+                      setEditMixModalVisible(false);
+                  });
+              } else {
+                  Animated.spring(panY, { toValue: 0, useNativeDriver: true, bounciness: 4 }).start();
+              }
+          }
+      })
+  ).current;
+
+  useEffect(() => {
+      if (mixtapeModalVisible || editMixModalVisible) {
+          panY.setValue(0);
+      }
+  }, [mixtapeModalVisible, editMixModalVisible, panY]);
 
   useFocusEffect(
     React.useCallback(() => {
@@ -367,10 +405,10 @@ export default function DetailsScreen() {
     let url = '';
 
     if (type === 'movie') {
-      if (!source.movieUrl) { Alert.alert("Server Error", "This server does not support movies."); return; }
+      if (!source.movieUrl) { showAlert("Server Error", "This server does not support movies."); return; }
       url = source.movieUrl.replace('{imdb_id}', targetId);
     } else {
-      if (!source.tvUrl) { Alert.alert("Server Error", "This server does not support TV shows."); return; }
+      if (!source.tvUrl) { showAlert("Server Error", "This server does not support TV shows."); return; }
       url = source.tvUrl.replace('{imdb_id}', targetId).replace('{season}', selectedSeason).replace('{episode}', epToPlay);
     }
 
@@ -392,7 +430,7 @@ export default function DetailsScreen() {
       playStartTimeRef.current = null;
       setTimeout(() => { scrollViewRef.current?.scrollTo({ y: 0, animated: true }); }, 100);
     } else {
-      Alert.alert("No Trailer", "A trailer is not available for this title.");
+      showAlert("No Trailer", "A trailer is not available for this title.");
     }
   };
 
@@ -410,6 +448,16 @@ export default function DetailsScreen() {
           setNewMixtapeName('');
           setNewMixtapeDesc('');
           setShowNewMixForm(false);
+      }
+  };
+
+  const handleToggleInMixtape = async (mixId) => {
+      if (loadingMixId) return; // prevent double-tap while another is in flight
+      setLoadingMixId(mixId);
+      try {
+          await toggleInMixtape(mixId, getLiteItem());
+      } finally {
+          setLoadingMixId(null);
       }
   };
 
@@ -475,7 +523,7 @@ export default function DetailsScreen() {
         if (navigator && navigator.share) await navigator.share({ title: `Check out ${title}`, text: `Watch ${title} right now on Nuvix!`, url: shareUrl });
         else if (navigator && navigator.clipboard) {
           await navigator.clipboard.writeText(shareUrl);
-          Alert.alert("Link Copied!", "The share link has been copied to your clipboard.");
+          showAlert("Link Copied!", "The share link has been copied to your clipboard.");
         }
       } else {
         await Share.share({ message: `Watch ${title} right now on Nuvix!\n\n${shareUrl}`, url: shareUrl, title: `Check out ${title}` }); 
@@ -768,177 +816,163 @@ export default function DetailsScreen() {
         )}
       </ScrollView>
 
-      {/* 🔥 EXPANDED MIXTAPE BOTTOM SHEET WITH EDIT & VIEW REDIRECTS */}
       <Modal visible={mixtapeModalVisible} transparent animationType="slide">
-        <KeyboardWrapper behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.bottomSheetOverlay}>
+        <KeyboardWrapper behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={isTablet ? styles.desktopModalOverlay : styles.bottomSheetOverlay}>
           <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => setMixtapeModalVisible(false)} />
-          <View style={[styles.bottomSheetContainer, { backgroundColor: theme.background, borderColor: theme.border }]}>
+          <Animated.View style={[isTablet ? styles.desktopModalContainer : styles.bottomSheetContainer, { backgroundColor: theme.background, borderColor: theme.border }, !isTablet && { transform: [{ translateY: panY }] }]}>
             
-            <View style={styles.bottomSheetHandle} />
-            <Text style={[styles.bottomSheetTitle, { color: theme.text }]}>Add to Mixtape</Text>
+            <View {...(!isTablet ? panResponder.panHandlers : {})} style={{ backgroundColor: 'transparent', paddingTop: 10, paddingBottom: 10 }}>
+                {!isTablet && <View style={styles.bottomSheetHandle} />}
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                    <Text style={[styles.bottomSheetTitle, { color: theme.text, marginBottom: 0 }]}>Add to Mixtape</Text>
+                    {isTablet && (<TouchableOpacity onPress={() => setMixtapeModalVisible(false)} hitSlop={{top:10, bottom:10, left:10, right:10}}><Ionicons name="close-circle" size={28} color={theme.textSecondary} /></TouchableOpacity>)}
+                </View>
+            </View>
 
             {showNewMixForm ? (
-                <View style={[styles.newMixForm, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+                <View style={[styles.newMixForm, { backgroundColor: theme.surfaceGlass, borderColor: theme.border }]}>
                     <Text style={{color: theme.textSecondary, fontSize: 12, fontWeight: 'bold', marginBottom: 5}}>CREATE NEW</Text>
-                    <TextInput 
-                        style={[styles.mixInput, { backgroundColor: theme.background, color: theme.text, borderColor: theme.border }]}
-                        placeholder="Mixtape Title"
-                        placeholderTextColor={theme.textSecondary}
-                        value={newMixtapeName}
-                        onChangeText={setNewMixtapeName}
-                    />
-                    <TextInput 
-                        style={[styles.mixInputDesc, { backgroundColor: theme.background, color: theme.text, borderColor: theme.border }]}
-                        placeholder="Description (Optional)"
-                        placeholderTextColor={theme.textSecondary}
-                        value={newMixtapeDesc}
-                        onChangeText={setNewMixtapeDesc}
-                        multiline
-                    />
+                    <TextInput style={[styles.mixInput, { backgroundColor: theme.background, color: theme.text, borderColor: theme.border }]} placeholder="Mixtape Title" placeholderTextColor={theme.textSecondary} value={newMixtapeName} onChangeText={setNewMixtapeName} />
+                    <TextInput style={[styles.mixInputDesc, { backgroundColor: theme.background, color: theme.text, borderColor: theme.border }]} placeholder="Description (Optional)" placeholderTextColor={theme.textSecondary} value={newMixtapeDesc} onChangeText={setNewMixtapeDesc} multiline />
                     <View style={{flexDirection: 'row', gap: 10, marginTop: 10}}>
-                        <TouchableOpacity style={[styles.actionBtn, {backgroundColor: theme.surfaceGlass}]} onPress={() => setShowNewMixForm(false)}>
-                            <Text style={{color: theme.text, fontWeight: 'bold'}}>Cancel</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity style={[styles.actionBtn, {backgroundColor: newMixtapeName.trim() ? theme.primary : theme.surfaceGlass}]} disabled={!newMixtapeName.trim()} onPress={handleCreateMixtape}>
-                            <Text style={{color: newMixtapeName.trim() ? '#fff' : theme.textSecondary, fontWeight: 'bold'}}>Create</Text>
-                        </TouchableOpacity>
+                        <TouchableOpacity style={[styles.actionBtn, {backgroundColor: theme.surface}]} onPress={() => setShowNewMixForm(false)}><Text style={{color: theme.text, fontWeight: 'bold'}}>Cancel</Text></TouchableOpacity>
+                        <TouchableOpacity style={[styles.actionBtn, {backgroundColor: newMixtapeName.trim() ? theme.primary : theme.surface}]} disabled={!newMixtapeName.trim()} onPress={handleCreateMixtape}><Text style={{color: newMixtapeName.trim() ? '#fff' : theme.textSecondary, fontWeight: 'bold'}}>Create</Text></TouchableOpacity>
                     </View>
                 </View>
             ) : (
-                <TouchableOpacity style={[styles.createNewMixBtn, { borderColor: theme.border, backgroundColor: theme.surface }]} onPress={() => setShowNewMixForm(true)}>
+                <TouchableOpacity style={[styles.createNewMixBtn, { borderColor: theme.border, backgroundColor: theme.surfaceGlass }]} onPress={() => setShowNewMixForm(true)}>
                     <Ionicons name="add-circle" size={24} color={theme.text} />
                     <Text style={{color: theme.text, marginLeft: 10, fontSize: 16, fontWeight: 'bold'}}>Create New Mixtape</Text>
                 </TouchableOpacity>
             )}
 
-            <ScrollView style={{maxHeight: 350, marginTop: 15}} showsVerticalScrollIndicator={false}>
+            <ScrollView style={{maxHeight: isTablet ? 500 : 350, marginTop: 15}} showsVerticalScrollIndicator={false}>
                {mixtapes.map((mix) => {
                  const isItemInMix = mix.items.some(i => i.id === details?.id);
+                 const isThisLoading = loadingMixId === mix.id;
                  return (
-                   <View key={mix.id} style={[styles.mixtapeRowItem, { borderBottomColor: theme.border }]}>
-                     
-                     <TouchableOpacity 
-                        style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}
-                        onPress={() => toggleInMixtape(mix.id, getLiteItem())}
+                   <View key={mix.id} style={[styles.mixtapeRowCard, { backgroundColor: theme.surfaceGlass, borderColor: theme.border }]}>
+                     <TouchableOpacity
+                       style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}
+                       onPress={() => handleToggleInMixtape(mix.id)}
+                       disabled={!!loadingMixId}
+                       activeOpacity={0.7}
                      >
-                       <View style={[styles.mixtapeCircleCheck, { borderColor: isItemInMix ? theme.primary : theme.textSecondary, backgroundColor: isItemInMix ? theme.primary : 'transparent' }]}>
-                         {isItemInMix && <Ionicons name="checkmark" size={16} color="#fff" />}
+                       <View style={[
+                         styles.mixtapeCircleCheck,
+                         {
+                           borderColor: isThisLoading ? theme.primary : isItemInMix ? theme.primary : theme.textSecondary,
+                           backgroundColor: isItemInMix && !isThisLoading ? theme.primary : 'transparent'
+                         }
+                       ]}>
+                         {isThisLoading
+                           ? <ActivityIndicator size="small" color={theme.primary} />
+                           : isItemInMix
+                             ? <Ionicons name="checkmark" size={16} color="#fff" />
+                             : null
+                         }
                        </View>
-
-                       <View style={{ width: 50, height: 50, marginRight: 15 }}>
-                          <MixtapeCover mixtape={mix} theme={theme} />
-                       </View>
-                       
-                       <View style={{flex: 1}}>
-                          <Text style={[styles.mixtapeRowTitle, { color: theme.text }]} numberOfLines={1}>{mix.title}</Text>
+                       <View style={{ width: 50, height: 50, marginRight: 15 }}><MixtapeCover mixtape={mix} theme={theme} /></View>
+                       <View style={{flex: 1, justifyContent: 'center'}}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                             <Text style={[styles.mixtapeRowTitle, { color: theme.text, flexShrink: 1 }]} numberOfLines={1}>{mix.title}</Text>
+                             {mix.isCollaborative && (
+                                 <View style={[styles.livePillSmall, { borderColor: 'rgba(106, 231, 14, 0.4)', backgroundColor: 'rgba(106, 231, 14, 0.1)' }]}>
+                                     <Ionicons name="people" size={10} color="#6ae70e" />
+                                     <Text style={[styles.livePillTextSmall, { color: '#6ae70e' }]}>GROUP</Text>
+                                 </View>
+                             )}
+                          </View>
                           <Text style={[styles.mixtapeRowSubtitle, { color: theme.textSecondary }]} numberOfLines={1}>
-                              {mix.items.length} items {mix.description ? ` • ${mix.description}` : ''}
+                              {mix.items.length} items • {mix.ownerName || mix.originalOwner || activeProfile?.name || 'My Profile'}
                           </Text>
                        </View>
                      </TouchableOpacity>
-
                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 15, marginLeft: 10 }}>
-                         <TouchableOpacity 
-                            onPress={() => { 
-                                setMixtapeModalVisible(false); 
-                                navigation.navigate('MainTabs', { screen: 'Library', params: { viewMixtapeId: mix.id } }); 
-                            }}
-                            hitSlop={{top: 15, bottom: 15, left: 10, right: 10}}
-                         >
+                         <TouchableOpacity onPress={() => { setMixtapeModalVisible(false); navigation.navigate('MainTabs', { screen: 'Library', params: { viewMixtapeId: mix.id } }); }} hitSlop={{top: 15, bottom: 15, left: 10, right: 10}}>
                             <Ionicons name="eye-outline" size={24} color={theme.textSecondary} />
                          </TouchableOpacity>
-                         
-                         <TouchableOpacity 
-                            onPress={() => openMixEditor(mix)}
-                            hitSlop={{top: 15, bottom: 15, left: 10, right: 10}}
-                         >
+                         <TouchableOpacity onPress={() => openMixEditor(mix)} hitSlop={{top: 15, bottom: 15, left: 10, right: 10}}>
                             <Ionicons name="pencil-outline" size={22} color={theme.textSecondary} />
                          </TouchableOpacity>
                      </View>
-
                    </View>
                  );
                })}
-               {mixtapes.length === 0 && !showNewMixForm && (
-                 <Text style={{color: theme.textSecondary, textAlign: 'center', marginTop: 30, fontStyle: 'italic'}}>No mixtapes created yet.</Text>
-               )}
+               {mixtapes.length === 0 && !showNewMixForm && (<Text style={{color: theme.textSecondary, textAlign: 'center', marginTop: 30, fontStyle: 'italic'}}>No mixtapes created yet.</Text>)}
             </ScrollView>
-
-          </View>
+          </Animated.View>
         </KeyboardWrapper>
       </Modal>
 
-      {/* 🔥 MIXTAPE EDIT MODAL IN DETAILS SCREEN */}
+      {/* EDIT MIXTAPE MODAL WITH SAFE LEAVE LOGIC */}
       <Modal visible={editMixModalVisible} transparent animationType="slide">
-        <KeyboardWrapper behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.bottomSheetOverlay}>
-           <View style={[styles.bottomSheetContainer, { backgroundColor: theme.background, borderColor: theme.border }]}>
-             <View style={styles.bottomSheetHandle} />
-             <Text style={[styles.bottomSheetTitle, { color: theme.text }]}>Edit Mixtape</Text>
-
-             {activeEditMix && (
-               <ScrollView showsVerticalScrollIndicator={false}>
-                 <View style={{ alignItems: 'center', marginBottom: 25 }}>
-                   <View style={{ width: 140, height: 140 }}>
-                     <MixtapeCover mixtape={activeEditMix} theme={theme} />
-                   </View>
+        <KeyboardWrapper behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={isTablet ? styles.desktopModalOverlay : styles.bottomSheetOverlay}>
+           <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => setEditMixModalVisible(false)} />
+           <Animated.View style={[isTablet ? styles.desktopModalContainer : styles.bottomSheetContainer, { backgroundColor: theme.background, borderColor: theme.border }, !isTablet && { transform: [{ translateY: panY }] }]}>
+             
+             <View {...(!isTablet ? panResponder.panHandlers : {})} style={{ backgroundColor: 'transparent', paddingTop: 10, paddingBottom: 10 }}>
+                 {!isTablet && <View style={styles.bottomSheetHandle} />}
+                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                     <Text style={[styles.bottomSheetTitle, { color: theme.text, marginBottom: 0 }]}>Edit Mixtape</Text>
+                     {isTablet && (<TouchableOpacity onPress={() => setEditMixModalVisible(false)} hitSlop={{top:10, bottom:10, left:10, right:10}}><Ionicons name="close-circle" size={28} color={theme.textSecondary} /></TouchableOpacity>)}
                  </View>
+             </View>
 
-                 <Text style={[styles.inputLabel, { color: theme.textSecondary }]}>RENAME MIXTAPE</Text>
-                 <TextInput 
-                    style={[styles.mixInput, { backgroundColor: theme.surface, color: theme.text, borderColor: theme.border, marginBottom: 15 }]}
-                    value={mixTitleEdit}
-                    onChangeText={setMixTitleEdit}
-                 />
-
-                 <Text style={[styles.inputLabel, { color: theme.textSecondary }]}>DESCRIPTION (OPTIONAL)</Text>
-                 <TextInput 
-                    style={[styles.mixInputDesc, { backgroundColor: theme.surface, color: theme.text, borderColor: theme.border, marginBottom: 20 }]}
-                    value={mixDescEdit}
-                    onChangeText={setMixDescEdit}
-                    multiline
-                 />
-
-                 <Text style={[styles.inputLabel, { color: theme.textSecondary }]}>COVER STYLE</Text>
-                 <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 30 }}>
-                    {['mosaic', 'stack', 'ambient', 'single'].map(style => (
-                        <TouchableOpacity 
-                           key={style} 
-                           onPress={() => {
-                              updateMixtapeStyle(activeEditMix.id, style);
-                              setActiveEditMix({...activeEditMix, coverStyle: style});
-                           }}
-                           style={[
-                             styles.stylePill, 
-                             { backgroundColor: activeEditMix.coverStyle === style ? theme.primary : theme.surfaceGlass, borderColor: theme.border }
-                           ]}
-                        >
-                           <Text style={{ color: activeEditMix.coverStyle === style ? '#fff' : theme.text, fontWeight: 'bold', textTransform: 'capitalize' }}>{style}</Text>
+             {activeEditMix && (() => {
+                 const isCollaboratorOnly = activeEditMix.isImported && activeEditMix.isCollaborative;
+                 return (
+                   <ScrollView showsVerticalScrollIndicator={false}>
+                     <View style={{ alignItems: 'center', marginBottom: 25 }}><View style={{ width: 140, height: 140 }}><MixtapeCover mixtape={activeEditMix} theme={theme} /></View></View>
+                     <Text style={[styles.inputLabel, { color: theme.textSecondary }]}>RENAME MIXTAPE</Text>
+                     <TextInput style={[styles.mixInput, { backgroundColor: theme.surface, color: theme.text, borderColor: theme.border, marginBottom: 15 }]} value={mixTitleEdit} onChangeText={setMixTitleEdit} />
+                     <Text style={[styles.inputLabel, { color: theme.textSecondary }]}>DESCRIPTION (OPTIONAL)</Text>
+                     <TextInput style={[styles.mixInputDesc, { backgroundColor: theme.surface, color: theme.text, borderColor: theme.border, marginBottom: 20 }]} value={mixDescEdit} onChangeText={setMixDescEdit} multiline />
+                     <Text style={[styles.inputLabel, { color: theme.textSecondary }]}>COVER STYLE</Text>
+                     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 30 }}>
+                        {['mosaic', 'stack', 'ambient', 'single'].map(style => (
+                            <TouchableOpacity key={style} onPress={() => { updateMixtapeStyle(activeEditMix.id, style); setActiveEditMix({...activeEditMix, coverStyle: style}); }} style={[styles.stylePill, { backgroundColor: activeEditMix.coverStyle === style ? theme.primary : theme.surfaceGlass, borderColor: theme.border }]}>
+                               <Text style={{ color: activeEditMix.coverStyle === style ? '#fff' : theme.text, fontWeight: 'bold', textTransform: 'capitalize' }}>{style}</Text>
+                            </TouchableOpacity>
+                        ))}
+                        <TouchableOpacity onPress={handlePickMixImage} style={[styles.stylePill, { backgroundColor: activeEditMix.coverStyle === 'custom' ? theme.primary : theme.surfaceGlass, borderColor: theme.border }]}>
+                           <Ionicons name="image" size={16} color={activeEditMix.coverStyle === 'custom' ? '#fff' : theme.text} style={{marginRight: 5}}/>
+                           <Text style={{ color: activeEditMix.coverStyle === 'custom' ? '#fff' : theme.text, fontWeight: 'bold' }}>Custom Photo</Text>
                         </TouchableOpacity>
-                    ))}
-                    <TouchableOpacity 
-                       onPress={handlePickMixImage}
-                       style={[styles.stylePill, { backgroundColor: activeEditMix.coverStyle === 'custom' ? theme.primary : theme.surfaceGlass, borderColor: theme.border }]}
-                    >
-                       <Ionicons name="image" size={16} color={activeEditMix.coverStyle === 'custom' ? '#fff' : theme.text} style={{marginRight: 5}}/>
-                       <Text style={{ color: activeEditMix.coverStyle === 'custom' ? '#fff' : theme.text, fontWeight: 'bold' }}>Custom Photo</Text>
-                    </TouchableOpacity>
-                 </View>
-
-                 <View style={{ flexDirection: 'row', gap: 10 }}>
-                    <TouchableOpacity style={[styles.actionBtn, { backgroundColor: 'rgba(229, 28, 35, 0.15)' }]} onPress={() => {
-                        deleteMixtape(activeEditMix.id);
-                        setEditMixModalVisible(false);
-                    }}>
-                        <Text style={{ color: '#e51c23', fontWeight: 'bold', fontSize: 16 }}>Delete</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity style={[styles.actionBtn, { backgroundColor: theme.text }]} onPress={saveMixEdit}>
-                        <Text style={{ color: theme.background, fontWeight: 'bold', fontSize: 16 }}>Done</Text>
-                    </TouchableOpacity>
-                 </View>
-               </ScrollView>
-             )}
-           </View>
+                     </View>
+                     <View style={{ flexDirection: 'row', gap: 10 }}>
+                        <TouchableOpacity 
+                            style={[styles.actionBtn, { backgroundColor: 'rgba(229, 28, 35, 0.15)' }]} 
+                            onPress={() => { 
+                                if (isCollaboratorOnly) leaveCollaborativeMixtape(activeEditMix.id);
+                                else deleteMixtape(activeEditMix.id); 
+                                setEditMixModalVisible(false); 
+                            }}>
+                            <Text style={{ color: '#e51c23', fontWeight: 'bold', fontSize: 16 }}>{isCollaboratorOnly ? 'Leave' : 'Delete'}</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={[styles.actionBtn, { backgroundColor: theme.text }]} onPress={saveMixEdit}>
+                            <Text style={{ color: theme.background, fontWeight: 'bold', fontSize: 16 }}>Done</Text>
+                        </TouchableOpacity>
+                     </View>
+                   </ScrollView>
+                 );
+             })()}
+           </Animated.View>
         </KeyboardWrapper>
+      </Modal>
+
+      {/* UNIFIED CUSTOM ALERT MODAL */}
+      <Modal visible={alertConfig.visible} transparent animationType="fade">
+         <View style={styles.alertOverlay}>
+            <View style={[styles.alertCard, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+               <Ionicons name="information-circle-outline" size={40} color={theme.text} style={{marginBottom: 15}} />
+               <Text style={[styles.alertTitle, { color: theme.text }]}>{alertConfig.title}</Text>
+               <Text style={[styles.alertMessage, { color: theme.textSecondary }]}>{alertConfig.message}</Text>
+               <TouchableOpacity style={[styles.alertButton, { backgroundColor: theme.primary }]} onPress={() => setAlertConfig({ ...alertConfig, visible: false })}>
+                  <Text style={styles.alertButtonText}>OK</Text>
+               </TouchableOpacity>
+            </View>
+         </View>
       </Modal>
 
     </View>
@@ -1017,21 +1051,37 @@ const styles = StyleSheet.create({
   carouselImage: { width: 130, height: 195, borderRadius: 8, borderWidth: 1, backgroundColor: '#333' },
 
   mixCoverBase: { width: '100%', aspectRatio: 1, borderRadius: 12, borderWidth: 1, flexWrap: 'wrap', flexDirection: 'row', overflow: 'hidden' }, 
+  
   bottomSheetOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.6)' },
   bottomSheetContainer: { width: '100%', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, paddingBottom: Platform.OS === 'ios' ? 40 : 20, borderWidth: 1, borderBottomWidth: 0 },
-  bottomSheetHandle: { width: 40, height: 5, backgroundColor: 'rgba(150,150,150,0.5)', borderRadius: 3, alignSelf: 'center', marginBottom: 20 },
-  bottomSheetTitle: { fontSize: 20, fontWeight: 'bold', marginBottom: 20 },
   
-  createNewMixBtn: { flexDirection: 'row', alignItems: 'center', padding: 15, borderRadius: 12, borderWidth: 1, borderStyle: 'dashed', marginBottom: 10 },
-  newMixForm: { padding: 15, borderRadius: 12, borderWidth: 1, marginBottom: 10 },
+  desktopModalOverlay: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.7)' },
+  desktopModalContainer: { width: 500, maxWidth: '90%', maxHeight: '85%', borderRadius: 24, padding: 24, borderWidth: 1, shadowColor: '#000', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.3, shadowRadius: 20 },
+
+  bottomSheetHandle: { width: 40, height: 5, backgroundColor: 'rgba(150,150,150,0.5)', borderRadius: 3, alignSelf: 'center', marginBottom: 20 },
+  bottomSheetTitle: { fontSize: 20, fontWeight: 'bold' },
+  
+  createNewMixBtn: { flexDirection: 'row', alignItems: 'center', padding: 15, borderRadius: 16, borderWidth: 1, borderStyle: 'dashed', marginBottom: 15 },
+  newMixForm: { padding: 15, borderRadius: 16, borderWidth: 1, marginBottom: 15 },
   mixInput: { height: 45, borderWidth: 1, borderRadius: 8, paddingHorizontal: 15, fontSize: 16, marginBottom: 10 },
   mixInputDesc: { height: 80, borderWidth: 1, borderRadius: 8, paddingHorizontal: 15, paddingTop: 10, fontSize: 14, textAlignVertical: 'top' },
   actionBtn: { flex: 1, paddingVertical: 12, borderRadius: 8, alignItems: 'center' },
 
-  mixtapeRowItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth },
+  mixtapeRowCard: { flexDirection: 'row', alignItems: 'center', padding: 12, borderRadius: 16, borderWidth: 1, marginBottom: 10 },
   mixtapeCircleCheck: { width: 24, height: 24, borderRadius: 12, borderWidth: 2, marginRight: 15, justifyContent: 'center', alignItems: 'center' },
-  mixtapeRowTitle: { fontSize: 16, fontWeight: '600', marginBottom: 2 },
+  mixtapeRowTitle: { fontSize: 16, fontWeight: '600' },
   mixtapeRowSubtitle: { fontSize: 13 },
+  
+  livePillSmall: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8, borderWidth: 1, gap: 4 },
+  livePillTextSmall: { fontSize: 9, fontWeight: '900', letterSpacing: 0.5 },
+
   inputLabel: { fontSize: 11, fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8, marginLeft: 4 },
-  stylePill: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20, borderWidth: 1 }
+  stylePill: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20, borderWidth: 1 },
+
+  alertOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center', padding: 20 },
+  alertCard: { width: '100%', maxWidth: 320, borderRadius: 16, padding: 20, borderWidth: 1, alignItems: 'center' },
+  alertTitle: { fontSize: 18, fontWeight: 'bold', marginBottom: 10, textAlign: 'center' },
+  alertMessage: { fontSize: 14, textAlign: 'center', marginBottom: 20 },
+  alertButton: { paddingVertical: 12, paddingHorizontal: 30, borderRadius: 25 },
+  alertButtonText: { color: '#fff', fontWeight: 'bold', fontSize: 16 }
 });
